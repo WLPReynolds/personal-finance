@@ -23,10 +23,10 @@ import {
 import {
   MAX_HORIZON_MONTHS, horizonEnd, withProjections, recurringItems,
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
-  upcomingDates, describeRule,
+  upcomingDates, describeRule, itemNumbering, seriesAmount, numberLabel,
 } from './lib/schedule.js';
 
-export const APP_VERSION = '0.5.0';
+export const APP_VERSION = '0.6.0';
 
 const state = {
   ledger: null,
@@ -34,6 +34,7 @@ const state = {
   activeAccountId: null,
   viewMode: readPref('viewMode', 'auto'), // 'auto' | 'list' | 'grid'
   gridScroll: null,
+  listScrollToToday: true, // phone list: jump to today on open / account switch, not on every redraw
   installPrompt: null,
   // Recurring items: how far ahead projected entries are shown. Every
   // device starts at 3 months each time the app opens; "show more" adds 3.
@@ -446,6 +447,9 @@ function render() {
     app.replaceChildren(h('div', { class: 'empty' }, 'All accounts are hidden. Open settings to show one.'));
     return;
   }
+  // coming back to the phone list from the grid: open it at today again
+  if (!isGrid() && state.lastRenderWasGrid) state.listScrollToToday = true;
+  state.lastRenderWasGrid = isGrid();
   if (isGrid()) {
     $('fab').hidden = true;
     renderGrid(accounts);
@@ -505,12 +509,11 @@ function renderList(accounts) {
       type: 'button', role: 'tab', class: `tab ${a.id === active.id ? 'tab-active' : ''}`,
       'aria-selected': String(a.id === active.id),
       style: { '--acc': institutionStyle(a.institution).colour },
-      onclick: () => { state.activeAccountId = a.id; render(); },
+      onclick: () => { state.activeAccountId = a.id; state.listScrollToToday = true; render(); },
     }, swatch(a), h('span', { class: 'tab-name' }, a.name))));
 
   // Same split as the grid header: today's balance, plus where it will be at
-  // the end of the current calendar month (the phone feed runs newest-first,
-  // so there's no single "top row" month to track like the grid has).
+  // the end of the current calendar month.
   // Today's figure counts confirmed entries only; end of month also counts
   // projected recurring entries (including any overdue, unconfirmed ones).
   const todayIsoStr = todayIso();
@@ -525,16 +528,19 @@ function renderList(accounts) {
     h('div', { class: 'banner-eom' }, `${active.type === 'credit' ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${monthYearLabel(eomIso)}`),
     h('button', { type: 'button', class: 'banner-edit', onclick: () => openAccountDialog(active.id) }, 'Account…'));
 
-  const running = accountRunning(view, active).reverse(); // newest first
+  // Oldest first, same order as the grid: future entries at the bottom.
+  const running = accountRunning(view, active);
   const today = todayIso();
   const feed = h('ul', { class: 'feed' });
-  const more = horizonControl('horizon-list');
-  if (more) feed.append(h('li', {}, more));
-  let lastDate = null;
+  feed.append(h('li', { class: 'day', dataset: { date: active.openingDate } }, longDate(active.openingDate)),
+    h('li', {}, h('div', { class: 'entry entry-note' },
+      h('span', { class: 'entry-main' }, h('span', { class: 'entry-desc' }, 'Brought forward')),
+      h('span', { class: 'entry-amts' }, h('span', { class: 'entry-bal' }, formatPence(active.openingBalance))))));
+  let lastDate = active.openingDate;
   for (const { transaction: t, runningBalance } of running) {
     if (t.date !== lastDate) {
       lastDate = t.date;
-      feed.append(h('li', { class: `day ${t.date > today ? 'future' : ''}` }, longDate(t.date), t.date > today ? ' · upcoming' : ''));
+      feed.append(h('li', { class: `day ${t.date > today ? 'future' : ''}`, dataset: { date: t.date } }, longDate(t.date), t.date > today ? ' · upcoming' : ''));
     }
     const other = counterpartOf(view, t);
     const otherAcc = other ? accountById(other.accountId) : null;
@@ -547,7 +553,9 @@ function renderList(accounts) {
         onclick: () => (p ? openOccurrenceDialog(p.itemId, p.period) : openTxDialog({ txId: t.id })),
       },
         h('span', { class: 'entry-main' },
-          h('span', { class: 'entry-desc' }, p ? h('span', { class: 'rec-icon', 'aria-label': 'Recurring' }, '↻ ') : null, t.description || '(no description)'),
+          h('span', { class: 'entry-desc' }, p ? h('span', { class: 'rec-icon', 'aria-label': 'Recurring' }, '↻ ') : null,
+            h('span', { class: 'desc-text' }, t.description || '(no description)'),
+            t.seriesNo ? h('span', { class: 'series-no' }, numberLabel(t.seriesNo)) : null),
           otherAcc || tags ? h('span', { class: 'entry-link' },
             otherAcc ? `${t.direction === 'debit' ? '→' : '←'} ${otherAcc.name}` : '',
             otherAcc && tags ? ' · ' : '',
@@ -558,15 +566,25 @@ function renderList(accounts) {
               h('span', { class: `entry-amt ${t.direction}` }, `${t.direction === 'credit' ? '+' : '−'}${formatPence(t.amount)}`),
               h('span', { class: `entry-bal ${runningBalance < 0 ? 'neg' : ''}` }, p?.skipped ? 'skipped' : formatPence(runningBalance))))));
   }
-  feed.append(lastDate === active.openingDate ? '' : h('li', { class: 'day' }, longDate(active.openingDate)),
-    h('li', {},h('div', { class: 'entry entry-note' },
-      h('span', { class: 'entry-main' }, h('span', { class: 'entry-desc' }, 'Brought forward')),
-      h('span', { class: 'entry-amts' }, h('span', { class: 'entry-bal' }, formatPence(active.openingBalance))))));
+  const more = horizonControl('horizon-list');
+  if (more) feed.append(h('li', { class: 'horizon-li' }, more));
 
   const wrap = h('div', { class: 'list-view' }, tabs, banner, feed);
   addSwipe(wrap, accounts);
   app.replaceChildren(wrap);
   tabs.querySelector('.tab-active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+  // On opening (and switching account), jump to today's first entry — or,
+  // if nothing is dated today, the most recent day before it. Ordinary
+  // redraws (after a save, a sync) leave the scroll where it is.
+  if (state.listScrollToToday) {
+    state.listScrollToToday = false;
+    const target = [...feed.querySelectorAll('li.day[data-date]')].filter((li) => li.dataset.date <= today).pop();
+    requestAnimationFrame(() => {
+      if (target) target.scrollIntoView({ block: 'start' });
+      else window.scrollTo(0, 0);
+    });
+  }
 }
 
 function addSwipe(el, accounts) {
@@ -583,7 +601,7 @@ function addSwipe(el, accounts) {
     if (Math.abs(dx) < 70 || Math.abs(dy) > 50) return;
     const i = accounts.findIndex((a) => a.id === state.activeAccountId);
     const j = i + (dx < 0 ? 1 : -1);
-    if (j >= 0 && j < accounts.length) { state.activeAccountId = accounts[j].id; render(); }
+    if (j >= 0 && j < accounts.length) { state.activeAccountId = accounts[j].id; state.listScrollToToday = true; render(); }
   });
 }
 
@@ -630,9 +648,10 @@ function renderGrid(accounts) {
       dataset: { date: row.date },
     },
       h('td', { class: 'sticky-l c-date clickable', onclick: openRow }, shortDate(row.date)),
-      h('td', { class: 'sticky-l2 c-desc clickable', title: p ? `${row.description} — ${tags.label}` : row.description, onclick: openRow },
+      h('td', { class: 'sticky-l2 c-desc clickable', title: `${row.description}${row.seriesNo ? ` ${numberLabel(row.seriesNo)}` : ''}${p ? ` — ${tags.label}` : ''}`, onclick: openRow },
         p ? h('span', { class: 'rec-icon', title: `Recurring — ${tags.label}` }, '↻ ') : null,
-        row.isTransfer ? h('span', { class: 'link-icon', title: 'Linked transfer' }, '⇄ ') : null, row.description));
+        row.isTransfer ? h('span', { class: 'link-icon', title: 'Linked transfer' }, '⇄ ') : null, row.description,
+        row.seriesNo ? h('span', { class: 'series-no' }, ` ${numberLabel(row.seriesNo)}`) : null));
     for (const a of accounts) {
       const cell = row.cells[a.id];
       const open = (direction) => () =>
@@ -919,7 +938,7 @@ function openOccurrenceDialog(itemId, period) {
       // store only what differs from the series, so later series edits still flow through the rest
       apply(() => setOccurrence(state.ledger, itemId, period, {
         date: f.date === p.seriesDate ? null : f.date,
-        amount: f.amount === item.amount ? null : f.amount,
+        amount: f.amount === p.seriesAmount ? null : f.amount,
         description: f.description === item.description ? null : f.description,
       }), `Changed for ${periodLabel(period)} only`);
     },
@@ -946,7 +965,8 @@ function openOccurrenceDialog(itemId, period) {
       ]
     : [
         h('p', { class: `rec-status ${p.date <= today ? 'rec-due' : ''}` }, status,
-          p.changed ? h('span', { class: 'muted' }, ` Changed for this month (series: ${longDate(p.seriesDate)}, ${formatPence(item.amount)}).`) : null),
+          p.number ? ` Payment ${p.number.n} of ${p.number.of}${p.number.n === p.number.of ? ' — the last one' : ''}.` : null,
+          p.changed ? h('span', { class: 'muted' }, ` Changed for this month (series: ${longDate(p.seriesDate)}, ${formatPence(p.seriesAmount)}).`) : null),
         h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount),
         h('div', { class: 'field-pair' },
           h('label', { class: 'field' }, h('span', {}, 'Date'), date),
@@ -961,7 +981,7 @@ function openOccurrenceDialog(itemId, period) {
       account ? swatch(account) : null,
       h('h2', {}, `↻ ${item.description}`),
       h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: close }, '✕')),
-    h('p', { class: 'muted small rec-summary' }, `${itemAccountsText(item)} · ${signedAmount(item.kind, item.amount)} · ${describeRule(item)}`),
+    h('p', { class: 'muted small rec-summary' }, `${itemAccountsText(item)} · ${signedAmount(item.kind, item.amount)}${item.finalAmount != null && item.endDate ? ` (last ${formatPence(item.finalAmount)})` : ''} · ${describeRule(item)}`),
     body));
   openDialog(dlg);
 }
@@ -984,7 +1004,7 @@ function renderRecurringManager() {
           h('span', { class: 'rec-main' },
             h('span', { class: 'rec-name' }, item.description),
             h('span', { class: 'muted small' }, `${describeRule(item)} · ${itemAccountsText(item)}`),
-            h('span', { class: 'small' }, ended ? `Ended${item.endDate ? ` ${longDate(item.endDate)}` : ''}` : `Next: ${longDate(next)}`)),
+            h('span', { class: 'small' }, ended ? `Ended${item.endDate ? ` ${longDate(item.endDate)}` : ''}` : `Next: ${longDate(next)}${nextNumberText(item)}`)),
           h('span', { class: `rec-amt ${item.kind === 'in' ? 'credit' : ''}` }, signedAmount(item.kind, item.amount))));
       }))
     : h('p', { class: 'muted' }, 'None yet. Add salary, direct debits, subscriptions and card payments here — they then appear ahead of time in your accounts, ready to confirm.');
@@ -996,6 +1016,14 @@ function renderRecurringManager() {
     list,
     h('button', { type: 'button', class: 'btn-primary', onclick: () => openRecurringEditor(null) }, '+ Add recurring item'),
     h('p', { class: 'muted small' }, holidayStatusText())));
+}
+
+/** " · payment 3 of 12" for the next payment not yet confirmed or skipped, or ''. */
+function nextNumberText(item) {
+  if (!item.endDate) return '';
+  const view = withProjections(state.ledger, item.endDate, state.holidays);
+  const p = view.transactions.find((t) => t.isProjected && t.scheduledItemId === item.id && !t.skipped && t.date >= todayIso())?.projection;
+  return p?.number ? ` · payment ${p.number.n} of ${p.number.of}` : '';
 }
 
 function openRecurringManager() {
@@ -1031,6 +1059,13 @@ function openRecurringEditor(itemId) {
   const day = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', placeholder: '1–31', value: existing ? String(existing.day) : '' });
   const start = h('input', { type: 'date', required: true, value: existing?.startDate ?? todayIso() });
   const end = h('input', { type: 'date', value: existing?.endDate ?? '' });
+  const finalAmt = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input', placeholder: 'same', value: existing?.finalAmount != null ? penceToInput(existing.finalAmount) : '' });
+  const firstNo = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', value: String(existing?.firstNumber ?? 1) });
+  const endFields = h('div', {},
+    h('div', { class: 'field-pair' },
+      h('label', { class: 'field' }, h('span', {}, 'Last payment (£)'), finalAmt),
+      h('label', { class: 'field' }, h('span', {}, 'First payment no.'), firstNo)),
+    h('div', { class: 'muted small end-hint' }, 'Leave the last payment blank if it’s the same. Entries show “(x of y)” — if you’ve already paid some before this series starts, set its first payment number, e.g. 2 if payment 1 is done.'));
   const shift = h('select', {},
     [['none', 'Leave it on that day'], ['before', 'Move to the working day before (e.g. salary)'], ['after', 'Move to the next working day (e.g. direct debit)']].map(([v, l]) =>
       h('option', { value: v, selected: (existing?.shift ?? 'none') === v }, l)));
@@ -1043,6 +1078,8 @@ function openRecurringEditor(itemId) {
       description: desc.value, kind, accountId: account.value, toAccountId: kind === 'transfer' ? toAccount.value : null,
       amount: parseAmount(amount.value), everyMonths, day: Number.parseInt(day.value, 10),
       startDate: start.value, endDate: end.value || null, shift: shift.value,
+      finalAmount: end.value && finalAmt.value.trim() ? parseAmount(finalAmt.value) : null,
+      firstNumber: end.value ? Number.parseInt(firstNo.value, 10) : (existing?.firstNumber ?? 1),
     };
   }
   function sync() {
@@ -1050,17 +1087,30 @@ function openRecurringEditor(itemId) {
     toField.hidden = kind !== 'transfer';
     accountLabel.textContent = kind === 'transfer' ? 'From' : 'Account';
     nField.hidden = freq.value !== 'n';
+    endFields.hidden = !end.value;
     startHint.textContent = freq.value === '1' ? 'Nothing before this date.' : 'Nothing before this date — and it repeats counting from this month.';
     const d = draft();
     let text = '';
     if (d.day >= 1 && d.day <= 31 && d.everyMonths >= 1 && d.everyMonths <= 12 && d.startDate) {
       const next = upcomingDates(d, todayIso(), 3, state.holidays);
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
+      if (d.endDate && d.endDate >= d.startDate && d.firstNumber >= 1) {
+        const numbering = itemNumbering(state.ledger, { ...d, id: existing?.id ?? '' });
+        const periods = [...numbering.keys()];
+        if (periods.length) {
+          const first = numbering.get(periods[0]);
+          const lastP = periods[periods.length - 1];
+          const lastAmt = seriesAmount({ ...d, finalAmount: d.finalAmount ?? null }, lastP, numbering);
+          text += `\n${periods.length} payment${periods.length === 1 ? '' : 's'}, numbered ${first.n}–${first.of} of ${first.of}`;
+          if (Number.isInteger(lastAmt)) text += ` · last one ${formatPence(lastAmt)} in ${periodLabel(lastP)}`;
+        }
+      }
     }
     preview.textContent = text;
+    preview.style.whiteSpace = 'pre-line';
     preview.hidden = !text;
   }
-  for (const el of [freq, nMonths, day, start, end, shift]) el.addEventListener('input', sync);
+  for (const el of [freq, nMonths, day, start, end, shift, finalAmt, firstNo, amount]) el.addEventListener('input', sync);
   for (const el of [freq, shift, account]) el.addEventListener('change', sync);
 
   const form = h('form', {
@@ -1071,6 +1121,8 @@ function openRecurringEditor(itemId) {
       if (d.amount === null) return toast('Enter an amount like 12.34', 'error');
       if (Number.isNaN(d.day)) return toast('Day of the month must be 1 to 31', 'error');
       if (Number.isNaN(d.everyMonths)) return toast('Repeat every 1 to 12 months', 'error');
+      if (end.value && finalAmt.value.trim() && d.finalAmount === null) return toast('Enter the last payment like 12.34, or leave it blank', 'error');
+      if (Number.isNaN(d.firstNumber)) return toast('First payment number must be 1 to 999', 'error');
       const next = existing
         ? attempt(() => updateRecurring(state.ledger, existing.id, d))
         : attempt(() => addRecurring(state.ledger, d)?.ledger);
@@ -1096,6 +1148,7 @@ function openRecurringEditor(itemId) {
     h('label', { class: 'field' }, h('span', {}, 'From'), start),
     h('label', { class: 'field' }, h('span', {}, 'To (blank = no end)'), end)),
   startHint,
+  endFields,
   h('label', { class: 'field' }, h('span', {}, 'If it lands on a weekend or bank holiday'), shift),
   preview,
   h('div', { class: 'sheet-actions' },

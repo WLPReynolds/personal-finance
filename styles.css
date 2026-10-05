@@ -178,12 +178,19 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
   background: var(--surface); border: 0; border-bottom: 1px solid var(--line); padding: 12px; cursor: pointer; min-height: 56px;
 }
-.feed li:has(+ .day) .entry, .feed li:last-child .entry { border-bottom: 0; }
+.feed li:has(+ .day) .entry, .feed li:has(+ .horizon-li) .entry, .feed li:last-child .entry { border-bottom: 0; }
 .day + li .entry { border-radius: 10px 10px 0 0; }
-.feed li:has(+ .day) .entry { border-radius: 0 0 10px 10px; }
-.day + li:has(+ .day) .entry, .day + li:last-child .entry { border-radius: 10px; }
+.feed li:has(+ .day) .entry, .feed li:has(+ .horizon-li) .entry, .feed li:last-child .entry { border-radius: 0 0 10px 10px; }
+.day + li:has(+ .day) .entry, .day + li:has(+ .horizon-li) .entry, .day + li:last-child .entry { border-radius: 10px; }
+/* jumping to today: land the day heading just below the sticky top bar + account tabs */
+.feed .day { scroll-margin-top: calc(57px + 61px + env(safe-area-inset-top)); }
+.horizon-li { padding-top: 10px; }
 .entry-main { flex: 1; min-width: 0; display: grid; }
-.entry-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.entry-desc { display: flex; min-width: 0; white-space: nowrap; font-weight: 500; }
+.entry-desc .desc-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.entry-desc .rec-icon { flex: none; white-space: pre; }
+.series-no { flex: none; margin-left: 0.35em; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.c-desc .series-no { margin-left: 0; }
 .entry-link { font-size: 12px; color: var(--muted); }
 .entry-amts { display: grid; justify-items: end; }
 .entry-amt { font-weight: 600; }
@@ -312,3 +319,4 @@ body.mode-grid .toast { bottom: 24px; }
 .rec-amt { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rec-amt.credit { color: var(--credit); }
 .rec-preview { font-size: 13px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.end-hint { margin-top: 6px; }

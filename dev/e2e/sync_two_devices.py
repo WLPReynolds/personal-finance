@@ -90,7 +90,7 @@ try:
         # ---------- clash: both edit Gym amount
         def edit_amount(pg, desc, amount):
             if pg.is_visible('.feed'):
-                pg.click(f'.entry:has(.entry-desc:text-is("{desc}"))')
+                pg.click(f'.entry:has(.desc-text:text-is("{desc}"))')
             else:
                 pg.locator('table.grid tbody tr', has_text=desc).locator('td.c-desc').click()
             pg.wait_for_selector('#txDialog[open]')

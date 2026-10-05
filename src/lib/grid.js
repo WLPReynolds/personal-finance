@@ -28,6 +28,7 @@ export function buildGridRows(ledger, accounts) {
         kind: t.kind,
         isTransfer: Boolean(t.transferId),
         projection: t.isProjected ? t.projection : null, // set on projected rows (schedule.js)
+        seriesNo: t.seriesNo ?? null, // { n, of } on entries of a fixed-end recurring series (schedule.js)
         skipped: Boolean(t.skipped),
         txIds: [],
         cells: {},

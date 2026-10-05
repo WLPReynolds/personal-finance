@@ -63,7 +63,7 @@ def feed_rows(pg):
         cls: e.className.replace(/\\s+/g, ' ').trim(), text: e.innerText.replace(/\\s+/g, ' ').trim() }))''')
 
 def open_projected(pg, text):
-    pg.click(f'.feed .entry.projected:has-text("{text}") >> nth=-1')  # feed is newest-first: last = earliest
+    pg.click(f'.feed .entry.projected:has-text("{text}") >> nth=0')  # feed is oldest-first (v0.6): first = earliest
     pg.wait_for_selector('#txDialog[open]')
 
 try:
@@ -142,12 +142,12 @@ try:
         check('no amber rows left', not [r for r in rows if 'overdue' in r['cls']])
 
         # ---- skip November salary
-        pg.click('.feed .entry.projected:has-text("Salary") >> nth=-1')  # newest-first: last = earliest = Oct
+        pg.click('.feed .entry.projected:has-text("Salary") >> nth=0')  # oldest-first: Oct
         pg.wait_for_selector('#txDialog[open]')
         oct_text = pg.text_content('#txDialog')
         pg.click('#txDialog .icon-btn')
         check('earliest salary is 28 Oct', '28 Oct' in oct_text, oct_text[:120])
-        pg.click('.feed .entry.projected:has-text("Salary") >> nth=-2')  # November
+        pg.click('.feed .entry.projected:has-text("Salary") >> nth=1')  # November
         pg.wait_for_selector('#txDialog[open]')
         pg.click('#txDialog button:has-text("Skip this month")')
         pg.wait_for_selector('#txDialog[open]', state='detached')
@@ -156,7 +156,7 @@ try:
         check('November salary shown as skipped', len(skipped) == 1 and 'Salary' in skipped[0]['text'] and 'skipped' in skipped[0]['text'], skipped)
 
         # ---- change December salary date for this month only
-        pg.click('.feed .entry.projected:has-text("Salary") >> nth=-3')  # December
+        pg.click('.feed .entry.projected:has-text("Salary") >> nth=2')  # December
         pg.wait_for_selector('#txDialog[open]')
         check('December salary projected for Thu 24 Dec', 'Thu 24 Dec 2026' in norm(pg.text_content('#txDialog')))
         pg.fill('#txDialog input[type=date]', '2026-12-18')
@@ -165,7 +165,7 @@ try:
         saved(pg, 'only')
         dec_day = pg.evaluate('''() => [...document.querySelectorAll('.feed .day')].map(d => d.textContent)''')
         check('a Fri 18 Dec day appears', any('Fri 18 Dec 2026' in norm(d) for d in dec_day))
-        pg.click('.feed .entry.projected:has-text("Salary") >> nth=-3')
+        pg.click('.feed .entry.projected:has-text("Salary") >> nth=2')
         pg.wait_for_selector('#txDialog[open]')
         check('dialog notes the change from the series', 'Changed for this month' in pg.text_content('#txDialog'))
         pg.click('#txDialog .icon-btn')

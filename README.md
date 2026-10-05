@@ -4,10 +4,29 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.5.0 — Recurring items
+## Status: v0.6.0 — Recurring items: last payment & numbering; phone list order
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries.
+
+**New in v0.6.0**
+- **Phone list runs oldest → newest**, like the grid: Brought forward at the
+  top, future entries at the bottom, *Show 3 more months* at the very end. It
+  opens (and opens each account tab) at today's first entry — or, if nothing
+  is dated today, the latest day before it. Saves and syncs leave the scroll
+  where it is.
+- **Different last payment:** an item with an end date can have a *Last
+  payment* amount. It applies to the final payment actually due (if that
+  month is skipped, it moves to the one before). A one-off change to that
+  month still wins.
+- **"(x of y)" numbering** on every item with an end date (any frequency), on
+  projected and confirmed entries, phone and grid. *First payment no.* sets
+  where counting starts — e.g. 2 when payment 1 was made before the series
+  was set up, so 12 more payments show as 2 of 13 … 13 of 13. A skipped month
+  takes no number and the rest close up, so the total drops (skip one of 12 →
+  the last is "11 of 11"); move the end date out if the lender extends the
+  term. Numbers are worked out live, never stored — fix the numbering later
+  and confirmed entries follow; delete the series and they lose the number.
 
 ### Recurring items
 
@@ -137,5 +156,5 @@ just clears the old offline cache.
 npm test
 ```
 
-94 tests (incl. two-device sync + stress test, recurring items), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py` (and the others in `dev/e2e/`).
+105 tests (incl. two-device sync + stress test, recurring items), plain Node `assert`, no install needed.
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py` (and the others in `dev/e2e/`).

@@ -40,6 +40,9 @@ export const MAX_HORIZON_MONTHS = 12;
  * @property {string} startDate          - ISO; nothing before this
  * @property {string|null} endDate       - ISO; last entry on or before this. null = indefinitely
  * @property {'none'|'before'|'after'} shift - weekend/bank holiday: don't move / working day before / next working day
+ * @property {number|null} [finalAmount] - pence; the last payment's amount if it differs (needs an end date). null/absent = same as the rest
+ * @property {number} [firstNumber]      - fixed-end series only: the number of this series' first payment, for "(x of y)". Default 1;
+ *                                         e.g. 2 when payment 1 was made before the series was set up
  * @property {string} createdAt
  */
 
@@ -140,6 +143,68 @@ export function upcomingDates(item, fromIso, count, holidays) {
   return out;
 }
 
+// ------------------------------------------------------------------ numbering & final payment
+
+/** Every period the series falls due in, start to end. Only for a series with an end date. */
+function allPeriods(item) {
+  if (!item.endDate) return [];
+  const out = [];
+  const last = periodOf(item.endDate);
+  for (let p = periodOf(item.startDate); monthsBetween(p, last) >= 0; p = addMonths(p, 1)) {
+    if (nominalDate(item, p)) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Payment numbers for a series with an end date: Map period -> { n, of }.
+ * A skipped month (not confirmed) takes no number and the rest close up, so
+ * the total is the payments actually due: skip one of 12 and the last is
+ * "11 of 11". Numbering starts at the item's firstNumber (default 1).
+ * The final payment — the one finalAmount applies to — is the last numbered one.
+ * @param {Set<string>} skippedPeriods - periods skipped and not confirmed
+ */
+export function seriesNumbering(item, skippedPeriods = new Set()) {
+  const map = new Map();
+  const due = allPeriods(item).filter((p) => !skippedPeriods.has(p));
+  const first = item.firstNumber ?? 1;
+  const of = first + due.length - 1;
+  due.forEach((p, i) => map.set(p, { n: first + i, of }));
+  return map;
+}
+
+function skippedPeriodsFor(ledger, itemId, confirmed) {
+  return new Set(occurrenceExceptions(ledger)
+    .filter((e) => e.itemId === itemId && e.skipped && !confirmed.has(`${itemId}|${e.period}`))
+    .map((e) => e.period));
+}
+function confirmedKeys(ledger) {
+  return new Set(
+    ledger.transactions.filter((t) => t.scheduledItemId && t.scheduledPeriod).map((t) => `${t.scheduledItemId}|${t.scheduledPeriod}`)
+  );
+}
+
+/** The period of the final payment (last one not skipped), or null when there's no end date or nothing due. */
+function finalPeriodOf(numbering) {
+  let last = null;
+  for (const p of numbering.keys()) last = p;
+  return last;
+}
+
+/** Numbering for one item in a ledger (skips taken into account). */
+export function itemNumbering(ledger, item) {
+  return seriesNumbering(item, skippedPeriodsFor(ledger, item.id, confirmedKeys(ledger)));
+}
+
+/** The series' own amount for a month: finalAmount on the final payment, otherwise the usual amount. */
+export function seriesAmount(item, period, numbering) {
+  if (item.finalAmount == null || !item.endDate) return item.amount;
+  return finalPeriodOf(numbering) === period ? item.finalAmount : item.amount;
+}
+
+/** "(3 of 12)" — or '' when the entry isn't part of a numbered series. */
+export const numberLabel = (no) => (no ? `(${no.n} of ${no.of})` : '');
+
 // ------------------------------------------------------------------ projections
 
 /**
@@ -149,15 +214,14 @@ export function upcomingDates(item, fromIso, count, holidays) {
  *
  * @returns {Array<{ key: string, itemId: string, period: string, date: string, seriesDate: string,
  *   amount: number, description: string, kind: string, accountId: string, toAccountId: string|null,
- *   skipped: boolean, changed: boolean }>}
+ *   skipped: boolean, changed: boolean, seriesAmount: number, number: {n:number, of:number}|null }>}
  */
 export function projections(ledger, toIso, holidays) {
-  const confirmed = new Set(
-    ledger.transactions.filter((t) => t.scheduledItemId && t.scheduledPeriod).map((t) => `${t.scheduledItemId}|${t.scheduledPeriod}`)
-  );
+  const confirmed = confirmedKeys(ledger);
   const exceptions = new Map(occurrenceExceptions(ledger).map((e) => [e.id, e]));
   const out = [];
   for (const item of recurringItems(ledger)) {
+    const numbering = seriesNumbering(item, skippedPeriodsFor(ledger, item.id, confirmed));
     for (const { period, date } of seriesDates(item, toIso, holidays)) {
       if (confirmed.has(`${item.id}|${period}`)) continue;
       const ex = exceptions.get(exceptionId(item.id, period));
@@ -169,7 +233,9 @@ export function projections(ledger, toIso, holidays) {
         period,
         date: effectiveDate,
         seriesDate: date,
-        amount: ex?.amount ?? item.amount,
+        amount: ex?.amount ?? seriesAmount(item, period, numbering),
+        seriesAmount: seriesAmount(item, period, numbering),
+        number: numbering.get(period) ?? null, // { n, of } for a fixed-end series; null if skipped / open-ended
         description: ex?.description ?? item.description,
         kind: item.kind,
         accountId: item.accountId,
@@ -193,6 +259,7 @@ function projectionLegs(p) {
     isProjected: true,
     skipped: p.skipped,
     projection: p,
+    seriesNo: p.number,
     date: p.date,
     amount: p.amount,
     description: p.description,
@@ -218,7 +285,14 @@ export function withProjections(ledger, toIso, holidays) {
   const legs = projections(ledger, toIso, holidays)
     .flatMap(projectionLegs)
     .filter((t) => accountIds.has(t.accountId));
-  return { ...ledger, transactions: [...ledger.transactions, ...legs] };
+  // confirmed entries of a numbered series get their "(x of y)" too — worked
+  // out live, so it follows any later change to the series or a skip
+  const numberings = new Map(recurringItems(ledger).filter((i) => i.endDate).map((i) => [i.id, itemNumbering(ledger, i)]));
+  const real = ledger.transactions.map((t) => {
+    const no = t.scheduledItemId ? numberings.get(t.scheduledItemId)?.get(t.scheduledPeriod) : null;
+    return no ? { ...t, seriesNo: no } : t;
+  });
+  return { ...ledger, transactions: [...real, ...legs] };
 }
 
 // ------------------------------------------------------------------ edits
@@ -243,6 +317,11 @@ function validateItem(f, ledger) {
   if (f.endDate !== null && !isIso(f.endDate)) throw new Error('The end date isn’t a valid date');
   if (f.endDate && f.endDate < f.startDate) throw new Error('The end date is before the start date');
   if (!['none', 'before', 'after'].includes(f.shift)) throw new Error('Choose what happens on a weekend or bank holiday');
+  if (f.finalAmount !== null) {
+    if (!f.endDate) throw new Error('A different last payment needs an end date');
+    if (!Number.isInteger(f.finalAmount) || f.finalAmount <= 0) throw new Error('Last payment must be more than £0.00');
+  }
+  if (!Number.isInteger(f.firstNumber) || f.firstNumber < 1 || f.firstNumber > 999) throw new Error('First payment number must be 1 to 999');
 }
 
 function cleanItemFields(f) {
@@ -257,6 +336,8 @@ function cleanItemFields(f) {
     startDate: f.startDate,
     endDate: f.endDate || null,
     shift: f.shift ?? 'none',
+    finalAmount: f.finalAmount ?? null,
+    firstNumber: f.firstNumber ?? 1,
   };
 }
 

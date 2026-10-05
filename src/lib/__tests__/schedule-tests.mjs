@@ -8,7 +8,7 @@ import {
 import {
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
   projections, withProjections, seriesDates, upcomingDates, horizonEnd, describeRule,
-  recurringItems, occurrenceExceptions,
+  recurringItems, occurrenceExceptions, itemNumbering, numberLabel,
 } from '../schedule.js';
 import { emptyLedger, addAccount, addTransaction, deleteTransaction, updateTransaction, balanceAsOf, accountRunning } from '../ops.js';
 import { buildGridRows } from '../grid.js';
@@ -259,6 +259,104 @@ test('export → import keeps recurring items and exceptions', () => {
   const back = parseImport(JSON.stringify(buildExport(ledger, 'test'))).ledger;
   assert.equal(back.scheduledItems.length, 2);
   assert.deepEqual(projections(back, '2026-12-31', HOL), projections(ledger, '2026-12-31', HOL));
+});
+
+console.log('final payment & numbering (v0.6)');
+// A loan: 12 monthly payments 1 Nov 2026 – 1 Oct 2027, last one smaller.
+const loan = (accountId, extra = {}) => base(accountId, {
+  description: 'Car loan', amount: 25000, day: 1, startDate: '2026-11-01', endDate: '2027-10-01', ...extra,
+});
+const proj = (ledger) => projections(ledger, '2027-12-31', HOL);
+test('last payment uses finalAmount; the rest the usual amount', () => {
+  const s = setup();
+  const { ledger } = addRecurring(s.ledger, loan(s.current.id, { finalAmount: 12345 }));
+  const p = proj(ledger);
+  assert.equal(p.length, 12);
+  assert.deepEqual(p.slice(0, 11).map((x) => x.amount), Array(11).fill(25000));
+  assert.equal(p[11].amount, 12345);
+  assert.equal(p[11].period, '2027-10');
+});
+test('final amount needs an end date', () => {
+  const s = setup();
+  assert.throws(() => addRecurring(s.ledger, base(s.current.id, { finalAmount: 100 })), /end date/);
+  assert.throws(() => addRecurring(s.ledger, loan(s.current.id, { finalAmount: 0 })), /Last payment/);
+});
+test('(x of y) counts from 1 by default', () => {
+  const s = setup();
+  const { ledger } = addRecurring(s.ledger, loan(s.current.id));
+  const p = proj(ledger);
+  assert.deepEqual(p[0].number, { n: 1, of: 12 });
+  assert.deepEqual(p[11].number, { n: 12, of: 12 });
+  assert.equal(numberLabel(p[0].number), '(1 of 12)');
+});
+test('first payment number offsets the count (payment 1 made outside the series)', () => {
+  const s = setup();
+  const { ledger } = addRecurring(s.ledger, loan(s.current.id, { firstNumber: 2 }));
+  const p = proj(ledger);
+  assert.deepEqual(p[0].number, { n: 2, of: 13 });
+  assert.deepEqual(p[11].number, { n: 13, of: 13 });
+});
+test('open-ended items are not numbered', () => {
+  const s = setup();
+  const { ledger } = addRecurring(s.ledger, base(s.current.id));
+  assert.equal(proj(ledger)[0].number, null);
+});
+test('a skip closes the numbers up, the total drops, and the last payment moves back', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, loan(s.current.id, { finalAmount: 12345 }));
+  const ledger = setOccurrence(setOccurrence(l1, item.id, '2027-02', { skipped: true }), item.id, '2027-10', { skipped: true });
+  const p = proj(ledger).filter((x) => !x.skipped);
+  assert.equal(p.length, 10);
+  assert.deepEqual(p.map((x) => x.number.n), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.equal(p[3].period, '2027-03'); // after the skipped February
+  assert.equal(p[9].number.of, 10);
+  assert.equal(p[9].period, '2027-09');
+  assert.equal(p[9].amount, 12345); // final amount follows the last payment actually due
+  assert.equal(proj(ledger).find((x) => x.period === '2027-02').number, null);
+});
+test('confirmed entries keep their number, live, in the view ledger and the grid', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, loan(s.current.id, { firstNumber: 2 }));
+  const l2 = confirmOccurrence(l1, item.id, '2026-11', { date: '2026-11-02', amount: 25000 });
+  const view = withProjections(l2, '2027-01-31', HOL);
+  const confirmed = view.transactions.find((t) => t.scheduledPeriod === '2026-11' && !t.isProjected);
+  assert.deepEqual(confirmed.seriesNo, { n: 2, of: 13 });
+  assert.equal(l2.transactions.find((t) => t.id === confirmed.id).seriesNo, undefined); // never stored
+  const rows = buildGridRows(view, view.accounts);
+  assert.deepEqual(rows.map((r) => r.seriesNo && r.seriesNo.n), [2, 3, 4]);
+  // fix the numbering later → the confirmed one follows
+  const l3 = updateRecurring(l2, item.id, { firstNumber: 5 });
+  assert.deepEqual(withProjections(l3, '2026-11-30', HOL).transactions.find((t) => t.id === confirmed.id).seriesNo, { n: 5, of: 16 });
+});
+test('final amount on a transfer series (card payoff) hits both legs', () => {
+  const s = setup();
+  const { ledger } = addRecurring(s.ledger, loan(s.current.id, { kind: 'transfer', toAccountId: s.barclaycard.id, finalAmount: 999 }));
+  const view = withProjections(ledger, '2027-12-31', HOL);
+  const last = view.transactions.filter((t) => t.scheduledPeriod === '2027-10');
+  assert.deepEqual(last.map((t) => t.amount), [999, 999]);
+});
+test('a one-off change still beats the final amount; seriesAmount is the final one', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, loan(s.current.id, { finalAmount: 12345 }));
+  const ledger = setOccurrence(l1, item.id, '2027-10', { amount: 500 });
+  const last = proj(ledger)[11];
+  assert.equal(last.amount, 500);
+  assert.equal(last.seriesAmount, 12345);
+});
+test('items saved before v0.6 (no finalAmount/firstNumber) still work and can be edited', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, loan(s.current.id));
+  const old = { ...l1, scheduledItems: l1.scheduledItems.map(({ finalAmount, firstNumber, ...r }) => r) };
+  assert.deepEqual(proj(old)[0].number, { n: 1, of: 12 });
+  const edited = updateRecurring(old, item.id, { amount: 26000 });
+  assert.equal(recurringItems(edited)[0].firstNumber, 1);
+  assert.equal(recurringItems(edited)[0].finalAmount, null);
+});
+test('itemNumbering for a draft (editor preview)', () => {
+  const s = setup();
+  const n = itemNumbering(s.ledger, { ...loan(s.current.id), id: '', firstNumber: 3 });
+  assert.equal(n.size, 12);
+  assert.deepEqual(n.get('2027-10'), { n: 14, of: 14 });
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
