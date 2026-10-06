@@ -699,14 +699,22 @@ function renderGrid(accounts) {
     h('td', { class: 'sticky-l2 c-desc' }, 'Brought forward'),
     accounts.map((a) => [h('td', {}), h('td', {}), h('td', { class: 'num bal-col' }, formatPence(a.openingBalance))])));
 
+  // a line across the grid where a new calendar month starts
+  let prevMonth = openingDate.slice(0, 7);
   for (const row of rows) {
     const future = row.date > today;
+    const monthStart = row.date.slice(0, 7) !== prevMonth ? 'month-start' : '';
+    prevMonth = row.date.slice(0, 7);
     if (row.statement) {
       const st = row.statement;
       const cardId = Object.keys(row.cells)[0];
       const card = accountById(cardId);
       const openStmt = () => openStatementDialog(cardId, st.month);
-      const tr = h('tr', { class: `row-stmt ${future ? 'future' : ''} ${row.date === today ? 'is-today' : ''}`, dataset: { date: row.date } },
+      // the whole row tinted with a dimmed shade of the card's colour
+      const tr = h('tr', {
+        class: `row-stmt ${monthStart} ${future ? 'future' : ''} ${row.date === today ? 'is-today' : ''}`,
+        dataset: { date: row.date }, style: { '--stmt': institutionStyle(card.institution).colour },
+      },
         h('td', { class: 'sticky-l c-date clickable', onclick: openStmt }, shortDate(row.date)),
         h('td', { class: 'sticky-l2 c-desc clickable', onclick: openStmt, title: `${card.name} statement — payment due ${longDate(st.dueDate)}` },
           `▤ ${card.name} statement${future ? ' (estimate)' : ''}`));
@@ -723,7 +731,7 @@ function renderGrid(accounts) {
     const tags = p ? projectionTags(p, today) : null;
     const openRow = () => (p ? openOccurrenceDialog(p.itemId, p.period) : openTxDialog({ txId: row.txIds[0] }));
     const tr = h('tr', {
-      class: `${row.kind === 'note' ? 'row-note' : ''} ${future ? 'future' : ''} ${row.date === today ? 'is-today' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''}`,
+      class: `${monthStart} ${row.kind === 'note' ? 'row-note' : ''} ${future ? 'future' : ''} ${row.date === today ? 'is-today' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''}`,
       dataset: { date: row.date },
     },
       h('td', { class: 'sticky-l c-date clickable', onclick: openRow }, shortDate(row.date)),

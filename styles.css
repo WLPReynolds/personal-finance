@@ -240,7 +240,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .clickable { cursor: pointer; }
 .grid tbody tr:hover td { background: var(--surface-2); }
 .grid td.cell:hover { outline: 1px solid var(--primary); outline-offset: -1px; }
-.bal-carried { color: var(--muted); opacity: 0.55; }
+.bal-carried { color: color-mix(in srgb, var(--muted) 55%, transparent); } /* faded by colour, not opacity, so row tints and month lines stay solid */
 .bal-changed { font-weight: 600; }
 .row-bf td { font-weight: 600; background: var(--surface-2); }
 .row-note td { font-style: italic; color: var(--muted); }
@@ -332,9 +332,20 @@ body.mode-grid .toast { bottom: 24px; }
 .entry-stmt .entry-amt { font-weight: 700; }
 .entry-stmt.future { opacity: 0.75; }
 .stmt-tag { color: var(--primary); font-weight: 600; }
-.grid tbody tr.row-stmt td { background: var(--surface-2); font-weight: 700; border-top: 2px solid var(--primary); }
+/* grid: statement row tinted with the card's own colour (dimmed); upper case like the phone list */
+.grid tbody tr.row-stmt td {
+  background: var(--surface-2);
+  background: color-mix(in srgb, var(--stmt) 13%, var(--surface));
+  font-weight: 700;
+}
+.grid tbody tr.row-stmt td.c-desc { text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.92em; }
 .grid tbody tr.row-stmt.future td { font-weight: 600; color: var(--muted); }
-.grid .stmt-cell { text-align: center; color: var(--primary); }
+.grid .stmt-cell { text-align: center; color: var(--text); }
+@media (prefers-color-scheme: dark) {
+  .grid tbody tr.row-stmt td { background: color-mix(in srgb, var(--stmt) 22%, var(--surface)); }
+}
+/* grid: a line where each calendar month starts */
+.grid tbody tr.month-start td { border-top: 2px solid color-mix(in srgb, var(--text) 40%, transparent); }
 .acc-stmt { display: block; font-size: 11px; margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .stmt-choice { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
 .stmt-settings { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px 10px; display: grid; gap: 8px; margin: 0; }
@@ -351,3 +362,5 @@ body.mode-grid .toast { bottom: 24px; }
 .stmt-row-desc { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seg-small { flex: none; }
 .seg-small .seg-btn { min-height: 34px; padding: 4px 12px; }
+/* carried-forward balances stay faded on every kind of row (projected, statement) */
+.grid tbody tr td.bal-carried, .grid tbody tr.row-stmt.future td.bal-carried, .grid tbody tr.projected.overdue td.bal-carried { color: color-mix(in srgb, var(--muted) 55%, transparent); }

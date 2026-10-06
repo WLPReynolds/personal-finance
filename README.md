@@ -21,7 +21,9 @@ and (v0.7) **card statements**.
 - **Statement rows** appear in the card's column on each statement date,
   showing what's owed on that statement and when the payment is due.
   Future ones say "estimate". Tap one (phone) or click it (grid) to open the
-  statement.
+  statement. In the grid the whole statement row is tinted with a dimmed
+  shade of the card's colour and its text is in capitals, like the phone
+  list. A line across the grid marks the start of each calendar month.
 - **What's owed is worked out from your entries**, never typed in. It is the
   amount owed at the opening date, plus every entry on that statement or an
   earlier one, less payments and refunds. If the real statement differs, an
