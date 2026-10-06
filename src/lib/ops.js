@@ -166,10 +166,17 @@ export function addTransaction(ledger, fields) {
   return touch({ ...ledger, transactions: [...ledger.transactions, blankTx(fields)] });
 }
 
+/** Fields whose change means a reconciled entry must be checked again (v0.8). A new description doesn't. */
+const RECONCILE_FIELDS = ['amount', 'date', 'direction', 'accountId', 'kind', 'statementMonth'];
+const changedFrom = (before, after, keys) => keys.some((k) => (after[k] ?? null) !== (before[k] ?? null));
+
 /**
  * Edit a transaction in place (keeps its position = same-day order).
  * For a transfer leg, date/amount/description are mirrored onto the other
  * leg; changing direction flips both legs.
+ * v0.8: changing the amount, date, direction, account, kind or statement of a
+ * reconciled entry clears its tick — and the other leg's, when the change is
+ * mirrored onto it — so it gets checked again (the UI warns first).
  */
 export function updateTransaction(ledger, id, fields) {
   const existing = ledger.transactions.find((t) => t.id === id);
@@ -178,6 +185,7 @@ export function updateTransaction(ledger, id, fields) {
   validate(merged);
   if (merged.kind === 'note') merged.amount = 0;
   merged.description = (merged.description ?? '').trim();
+  if (existing.reconciled && changedFrom(existing, merged, RECONCILE_FIELDS)) merged.reconciled = false;
 
   if (!existing.transferId) {
     return touch({ ...ledger, transactions: ledger.transactions.map((t) => (t.id === id ? merged : t)) });
@@ -187,7 +195,9 @@ export function updateTransaction(ledger, id, fields) {
   const transactions = ledger.transactions.map((t) => {
     if (t.id === id) return merged;
     if (t.transferId === existing.transferId) {
-      return { ...t, date: merged.date, amount: merged.amount, description: merged.description, direction: opposite };
+      const leg = { ...t, date: merged.date, amount: merged.amount, description: merged.description, direction: opposite };
+      if (t.reconciled && changedFrom(t, leg, ['amount', 'date', 'direction'])) leg.reconciled = false;
+      return leg;
     }
     return t;
   });
@@ -225,12 +235,21 @@ export function deleteTransaction(ledger, id) {
 /**
  * Say which card statement an entry is on (statements.js). Pass null for
  * "whichever its date says". Only this entry changes — not a transfer's
- * other leg, which is on a different account.
+ * other leg, which is on a different account. Moving a reconciled entry to
+ * another statement clears its tick (v0.8).
  */
 export function setStatementMonth(ledger, id, month) {
   if (month !== null && !/^\d{4}-\d{2}$/.test(month)) throw new Error('Not a valid statement month');
   if (!ledger.transactions.some((t) => t.id === id)) throw new Error('Transaction not found');
-  return touch({ ...ledger, transactions: ledger.transactions.map((t) => (t.id === id ? { ...t, statementMonth: month } : t)) });
+  return touch({
+    ...ledger,
+    transactions: ledger.transactions.map((t) => {
+      if (t.id !== id) return t;
+      const next = { ...t, statementMonth: month };
+      if (t.reconciled && (t.statementMonth ?? null) !== month) next.reconciled = false;
+      return next;
+    }),
+  });
 }
 
 /** The other leg of a transfer, or null. */

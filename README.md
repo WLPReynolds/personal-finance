@@ -4,11 +4,33 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.7.1 — Every N days; card statements and statement payments
+## Status: v0.8.0 — Reconciling; every N days; card statements
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**New in v0.8.0 — reconciling**
+- **Reconcile** any account: the **✓** button in a grid column header, or
+  **Reconcile…** on the phone's account banner (also from a card's statement
+  dialog). Tick each line you can see on the bank's statement.
+- **Cards with statement dates** reconcile one **statement** at a time (the
+  latest one produced is chosen first). **Other accounts** reconcile up to a
+  **closing date** (today first), listing the month up to it.
+- Type in the bank's figure (a card's amount owed, or the closing balance —
+  minus sign if overdrawn). The screen shows the app's figure, the ticked
+  total and the **difference**, which reaches **✓ Balanced** at £0.00.
+  Nothing is ticked for you. The typed figure isn't saved.
+- Entries left unticked from an earlier period are listed too ("earlier, not
+  ticked yet"), so a line that turns up on a later statement isn't lost.
+  *Hide ticked* tidies the list.
+- Ticks sync like any edit. Ticked entries show **✓** in the grid and the
+  phone list. Changing a ticked entry's amount, date, account or statement
+  asks first and then unticks it (a new description doesn't); a transfer's
+  other leg is unticked too when the change carries over to it.
+- Also: grid column headers now line up (bars, names and balances level even
+  when a card has an extra statement line), and the recurring items page has
+  **+ Add** at the top.
 
 **New in v0.7.1 — every N days**
 - *Repeats* has a new choice, **Every so many days** (31 to 366), for things
@@ -187,6 +209,7 @@ just clears the old offline cache.
 - `src/lib/ops.js` — pure ledger operations (accounts, transactions, transfers, balances)
 - `src/lib/schedule.js` — recurring items: dates, projections, confirm/skip/one-off, series edits
 - `src/lib/statements.js` — card statements: dates, due dates, which statement an entry is on, amount owed, statement rows (v0.7)
+- `src/lib/reconcile.js` — reconciling: ticks, the period's entries, ticked total and difference (v0.8)
 - `src/lib/workdays.js` — weekends, bank holidays (gov.uk + built-in), working-day shifts, nth working day
 - `src/lib/grid.js` — builds the desktop grid rows
 - `src/lib/money.js` — pence ⇄ "£1,234.56"
@@ -210,7 +233,7 @@ just clears the old offline cache.
 
 1. Excel import (SheetJS) — historical data; October 2026 onwards is being kept as entered
 2. Envelopes UI (Monzo: Transport/Health/Maintenance)
-3. Reconcile mode (tick-off against a statement); a statement date that doesn't follow the card's rule one month (no override yet); Nationwide's statement rule
+3. A statement date that doesn't follow the card's rule one month (no override yet); Nationwide's statement rule
 4. Trip Mode, fuzzy search + archive, Export-to-Sheets
 5. Joint/shared ledger with Alison (sync engine is ready; `drive.file` means she opens the shared file once via Google's file picker)
 7. Draggable grid columns, iOS install hint
@@ -221,5 +244,5 @@ just clears the old offline cache.
 npm test
 ```
 
-143 tests (incl. two-device sync + stress test, recurring items, card statements), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py` (and the others in `dev/e2e/`).
+162 tests (incl. two-device sync + stress test, recurring items, card statements, reconciling), plain Node `assert`, no install needed.
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py` (and the others in `dev/e2e/`).

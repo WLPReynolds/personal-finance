@@ -72,6 +72,7 @@
  * @property {boolean} isProjected         - always false when stored; true only on derived projected rows (never saved)
  * @property {string|null} [statementMonth] - v0.7, card entries only: YYYY-MM of the statement it's really on, when that
  *                                            differs from its date (see statements.js). null/absent = by date
+ * @property {boolean} [reconciled]         - v0.8: ticked off against the bank / card statement (reconcile.js). absent = false
  */
 
 /**

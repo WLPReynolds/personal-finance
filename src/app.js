@@ -27,10 +27,13 @@ import {
 } from './lib/schedule.js';
 import {
   DEFAULT_PAYMENT_DAYS, statementConfig, statementDate, paymentDueDate, statementFor, statementMonthByDate,
-  boundaryChoice, withStatements, addMonths, monthOf,
+  boundaryChoice, withStatements, addMonths, monthOf, statementMonths,
 } from './lib/statements.js';
+import {
+  isReconciled, setReconciled, reconcileScope, reconcileDifference, defaultPeriod, reconcilesByStatement,
+} from './lib/reconcile.js';
 
-export const APP_VERSION = '0.7.1';
+export const APP_VERSION = '0.8.0';
 
 const state = {
   ledger: null,
@@ -568,7 +571,9 @@ function renderList(accounts) {
       if (!o) return null;
       return h('button', { type: 'button', class: 'banner-stmt', onclick: () => openStatementDialog(active.id, o.st.month) }, outlookText(active, o), ' ›');
     })(),
-    h('button', { type: 'button', class: 'banner-edit', onclick: () => openAccountDialog(active.id) }, 'Account…'));
+    h('div', { class: 'banner-btns' },
+      h('button', { type: 'button', class: 'banner-edit', onclick: () => openAccountDialog(active.id) }, 'Account…'),
+      h('button', { type: 'button', class: 'banner-edit banner-rec', onclick: () => openReconcileDialog(active.id) }, 'Reconcile…')));
 
   // Oldest first, same order as the grid: future entries at the bottom.
   const running = accountRunning(view, active);
@@ -620,7 +625,7 @@ function renderList(accounts) {
         t.kind === 'note'
           ? h('span', { class: 'entry-amt muted' }, 'note')
           : h('span', { class: 'entry-amts' },
-              h('span', { class: `entry-amt ${t.direction}` }, `${t.direction === 'credit' ? '+' : '−'}${formatPence(t.amount)}`),
+              h('span', { class: `entry-amt ${t.direction}` }, isReconciled(t) ? h('span', { class: 'rec-tick', title: 'Reconciled' }, '✓ ') : null, `${t.direction === 'credit' ? '+' : '−'}${formatPence(t.amount)}`),
               h('span', { class: `entry-bal ${runningBalance < 0 ? 'neg' : ''}` }, p?.skipped ? 'skipped' : formatPence(runningBalance))))));
   }
   const more = horizonControl('horizon-list');
@@ -671,6 +676,7 @@ function renderGrid(accounts) {
   const view = viewLedger();
   const rows = buildGridRows(view, accounts);
   const today = todayIso();
+  const reconciledIds = new Set(state.ledger.transactions.filter(isReconciled).map((t) => t.id));
 
   const head1 = h('tr', {},
     h('th', { class: 'sticky-l c-date', rowspan: '2' }, 'Date'),
@@ -678,11 +684,13 @@ function renderGrid(accounts) {
     accounts.map((a) => {
       const s = institutionStyle(a.institution);
       const todayBal = balanceAsOf(state.ledger, a, today);
-      return h('th', { colspan: '3', class: 'acc-head', style: { '--acc': s.colour } },
+      return h('th', { colspan: '3', class: 'acc-head', dataset: { accHead: a.id }, style: { '--acc': s.colour } },
         h('div', { class: 'acc-bar', style: { background: s.colour } }, s.accent ? h('span', { class: 'acc-bar-accent', style: { background: s.accent } }) : null),
         h('div', { class: 'acc-title' },
           h('button', { type: 'button', class: 'btn-link acc-name', title: 'Edit account', onclick: () => openAccountDialog(a.id) }, a.name),
-          h('button', { type: 'button', class: 'acc-add', title: `Add entry to ${a.name}`, onclick: () => openTxDialog({ accountId: a.id }) }, '+')),
+          h('span', { class: 'acc-btns' },
+            h('button', { type: 'button', class: 'acc-rec', title: `Reconcile ${a.name}`, 'aria-label': `Reconcile ${a.name}`, onclick: () => openReconcileDialog(a.id) }, '✓'),
+            h('button', { type: 'button', class: 'acc-add', title: `Add entry to ${a.name}`, onclick: () => openTxDialog({ accountId: a.id }) }, '+'))),
         h('div', { class: `acc-total ${todayBal < 0 ? 'neg' : ''}` }, `${a.type === 'credit' ? 'Owed ' : ''}${formatPence(todayBal)}`),
         h('div', { class: 'acc-eom', dataset: { eomFor: a.id } }),
         (() => {
@@ -742,12 +750,13 @@ function renderGrid(accounts) {
         row.stmtTag ? h('span', { class: 'stmt-tag' }, ` ${stmtTagText(row.stmtTag.tag, row.stmtTag.month, accountById(Object.keys(row.cells).find((id) => statementConfig(accountById(id)))) ?? accounts[0])}`) : null));
     for (const a of accounts) {
       const cell = row.cells[a.id];
+      const rec = cell?.txId && reconciledIds.has(cell.txId) ? ' is-rec' : '';
       const open = (direction) => () =>
         p ? openRow() : cell ? openTxDialog({ txId: cell.txId }) : openTxDialog({ accountId: a.id, date: row.date, direction });
       const bal = row.balances[a.id];
       tr.append(
-        h('td', { class: 'num clickable cell', onclick: open('credit') }, cell?.credit != null ? formatPence(cell.credit, { symbol: false }) : cell?.note ? '·' : ''),
-        h('td', { class: 'num clickable cell', onclick: open('debit') }, cell?.debit != null ? formatPence(cell.debit, { symbol: false }) : ''),
+        h('td', { class: `num clickable cell${cell?.credit != null ? rec : ''}`, onclick: open('credit'), title: cell?.credit != null && rec ? 'Reconciled' : null }, cell?.credit != null ? formatPence(cell.credit, { symbol: false }) : cell?.note ? '·' : ''),
+        h('td', { class: `num clickable cell${cell?.debit != null ? rec : ''}`, onclick: open('debit'), title: cell?.debit != null && rec ? 'Reconciled' : null }, cell?.debit != null ? formatPence(cell.debit, { symbol: false }) : ''),
         h('td', { class: `num bal-col ${cell ? 'bal-changed' : 'bal-carried'} ${bal < 0 ? 'neg' : ''}` }, formatPence(bal, { symbol: false })));
     }
     body.append(tr);
@@ -760,7 +769,7 @@ function renderGrid(accounts) {
   const wrap = h('div', { class: 'grid-wrap' }, table);
   app.replaceChildren(
     h('div', { class: 'grid-view' },
-      h('p', { class: 'grid-hint muted small' }, 'Click an empty Credit/Debit cell to add to that account on that date · click a value or description to edit · ⇄ = linked transfer · ↻ = recurring, click to confirm · ▤ = card statement, click to check it'),
+      h('p', { class: 'grid-hint muted small' }, 'Click an empty Credit/Debit cell to add to that account on that date · click a value or description to edit · ⇄ = linked transfer · ↻ = recurring, click to confirm · ▤ = card statement, click to check it · ✓ = reconciled (✓ button in a header to reconcile)'),
       wrap));
 
   // The "month in view" line tracks whichever row sits just below the
@@ -796,6 +805,9 @@ function renderGrid(accounts) {
   });
 
   requestAnimationFrame(() => {
+    // the Credit/Debit/Balance row sticks just under the account headers,
+    // whose height depends on how many lines the tallest one has
+    table.style.setProperty('--head1', `${Math.ceil(head1.getBoundingClientRect().height)}px`);
     if (keepScroll) { wrap.scrollTop = keepScroll.top; wrap.scrollLeft = keepScroll.left; }
     else {
       // open at today: the last row dated today or earlier sits near the
@@ -937,6 +949,11 @@ function openTxDialog(opts) {
         next = attempt(() => addTransaction(state.ledger, { ...fields, counterpartAccountId: counterpartSelect.value || null }));
       }
       if (!next) return;
+      if (existing) {
+        // a reconciled entry (or its other leg) whose amount/date/etc changes gets unticked — ask first
+        const unticked = state.ledger.transactions.filter((t) => isReconciled(t) && next.transactions.some((n) => n.id === t.id && !isReconciled(n)));
+        if (unticked.length && !confirm(`This entry has been reconciled${unticked.length > 1 ? ' (on both accounts)' : ''}.\n\nChanging it will untick it so you can check it again. Save anyway?`)) return;
+      }
       if (!existing) state.activeAccountId = account.id;
       dlg.close();
       commit(next, existing ? 'Updated' : 'Added');
@@ -953,11 +970,13 @@ function openTxDialog(opts) {
   stmtField,
   counterpartField,
   recurringNote,
+  existing && isReconciled(existing) ? h('div', { class: 'linked' }, '✓ Reconciled — matched against the bank. Changing the amount or date will untick it.') : null,
   h('div', { class: 'sheet-actions' },
     existing ? h('button', {
       type: 'button', class: 'btn-danger',
       onclick: () => {
-        if (!confirm(counterpart ? 'Delete this entry and its linked entry in the other account?' : 'Delete this entry?')) return;
+        const recNote = isReconciled(existing) || isReconciled(counterpart) ? '\n\nIt has been reconciled — the bank shows it.' : '';
+        if (!confirm((counterpart ? 'Delete this entry and its linked entry in the other account?' : 'Delete this entry?') + recNote)) return;
         dlg.close();
         commit(deleteTransaction(state.ledger, existing.id), 'Deleted');
       },
@@ -1196,6 +1215,8 @@ function openStatementDialog(cardId, month) {
         h('span', { class: 'muted small' }, st.date > today ? 'Owed so far (not produced yet)' : 'Owed on this statement'),
         h('strong', {}, formatPence(st.owed))),
       paymentBlock(view, st),
+      h('button', { type: 'button', class: 'btn-secondary btn-small', onclick: () => { dlg.close(); openReconcileDialog(card.id, { month }); } },
+        st.date > today ? 'Tick off entries so far…' : 'Reconcile this statement…'),
       h('h3', { class: 'stmt-h' }, 'Entries near the statement date'),
       h('p', { class: 'muted small' }, 'Something bought on (or just before) the statement date sometimes only appears on the next statement. If the real statement differs, move the entry — the amount owed and the payment follow.'),
       rows.length ? h('ul', { class: 'stmt-rows' }, rows) : h('p', { class: 'muted small' }, `Nothing on ${card.name} within 3 days of ${longDate(st.date)}.`),
@@ -1231,10 +1252,142 @@ function renderRecurringManager() {
   dlg.replaceChildren(h('div', { class: 'sheet-body' },
     h('header', { class: 'sheet-head' },
       h('h2', {}, 'Recurring items'),
-      h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
+      h('div', { class: 'head-actions' },
+        h('button', { type: 'button', class: 'btn-primary btn-small rec-add-top', onclick: () => openRecurringEditor(null) }, '+ Add'),
+        h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕'))),
     list,
-    h('button', { type: 'button', class: 'btn-primary', onclick: () => openRecurringEditor(null) }, '+ Add recurring item'),
+    items.length ? h('button', { type: 'button', class: 'btn-primary', onclick: () => openRecurringEditor(null) }, '+ Add recurring item') : null,
     h('p', { class: 'muted small' }, holidayStatusText())));
+}
+
+// ------------------------------------------------------------------ reconcile (v0.8)
+
+/** "1,234.56", "-12.30", "−5" -> pence (negative allowed: an overdrawn account, a card in credit). */
+function parseSignedAmount(text) {
+  const t = String(text ?? '').trim();
+  const neg = /^[-−]/.test(t);
+  const p = parseAmount(neg ? t.replace(/^[-−]\s*/, '') : t);
+  return p === null ? null : neg ? -p : p;
+}
+// The closing figure typed in from the bank is kept for this session only (not saved)
+const reconTyped = new Map(); // `${accountId}|${month or date}` -> text
+let reconHideTicked = false;
+
+function openReconcileDialog(accountId, period = null) {
+  const dlg = $('reconcileDialog');
+  const account = accountById(accountId);
+  if (!account) return;
+  const style = institutionStyle(account.institution);
+  const byStatement = reconcilesByStatement(account);
+  const credit = account.type === 'credit';
+  let current = period ?? defaultPeriod(account, todayIso(), state.holidays);
+  const keyOf = () => `${account.id}|${current.month ?? current.toDate}`;
+
+  const toggle = async (txId, on) => {
+    const next = attempt(() => setReconciled(state.ledger, txId, on));
+    if (!next) return;
+    await commit(next);
+    draw();
+  };
+
+  function periodPicker() {
+    if (byStatement) {
+      const today = todayIso();
+      const upTo = statementDate(account, addMonths(monthOf(today), 1), state.holidays);
+      const months = statementMonths(account, upTo, state.holidays).reverse();
+      if (current.month && !months.includes(current.month)) months.unshift(current.month);
+      const sel = h('select', { class: 'recon-period', onchange: () => { current = { month: sel.value }; draw(); } },
+        months.map((m) => {
+          const d = statementDate(account, m, state.holidays);
+          const label = new Date(`${d}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+          return h('option', { value: m, selected: m === current.month }, `${label}${d > today ? ' (so far)' : ''}`);
+        }));
+      return h('label', { class: 'field' }, h('span', {}, 'Statement'), sel);
+    }
+    const inp = h('input', { type: 'date', class: 'recon-period', value: current.toDate, required: true,
+      onchange: () => { if (inp.value) { current = { toDate: inp.value }; draw(); } } });
+    return h('label', { class: 'field' }, h('span', {}, 'Closing date (from the bank)'), inp);
+  }
+
+  function draw() {
+    const scope = attempt(() => reconcileScope(state.ledger, account, current, state.holidays));
+    if (!scope) return;
+    const keepScroll = dlg.scrollTop; // ticking a row redraws; don't jump back to the top
+    requestAnimationFrame(() => { dlg.scrollTop = keepScroll; });
+    const amountText = (pence) => (credit ? `${formatPence(pence)} owed` : formatPence(pence));
+
+    const bank = h('input', {
+      type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input recon-bank',
+      placeholder: credit ? 'e.g. 70.00' : 'e.g. 1,234.56', value: reconTyped.get(keyOf()) ?? '',
+    });
+    const summary = h('div', { class: 'recon-summary', 'aria-live': 'polite' });
+    const drawSummary = () => {
+      reconTyped.set(keyOf(), bank.value);
+      const typed = bank.value.trim() === '' ? null : parseSignedAmount(bank.value);
+      const line = (label, value, cls = '') => h('div', { class: `recon-line ${cls}` }, h('span', {}, label), h('strong', {}, value));
+      const parts = [
+        line(credit ? 'App works out' : 'App’s balance', amountText(scope.appBalance)),
+        line('Ticked so far', amountText(scope.tickedBalance)),
+      ];
+      if (bank.value.trim() !== '' && typed === null) {
+        parts.push(h('div', { class: 'recon-result warn' }, 'Enter the figure like 1,234.56 (minus sign if negative)'));
+      } else if (typed === null) {
+        parts.push(h('div', { class: 'recon-result muted' }, `Type in the ${credit ? 'amount owed on the statement' : 'closing balance from the bank'} to compare.`));
+      } else {
+        const diff = reconcileDifference(scope, typed);
+        parts.push(diff === 0
+          ? h('div', { class: 'recon-result ok' }, '✓ Balanced')
+          : h('div', { class: 'recon-result off' }, `Difference ${diff > 0 ? '+' : '−'}${formatPence(Math.abs(diff))}`,
+            h('span', { class: 'small' }, ' — tick the lines that are on the bank’s statement')));
+        if (typed !== scope.appBalance) {
+          parts.push(h('p', { class: 'muted small' }, `The bank’s figure and the app’s differ by ${formatPence(Math.abs(typed - scope.appBalance))} — once everything on the statement is ticked, any difference left is a missing or wrong entry (interest, a refund, a typo).`));
+        }
+      }
+      summary.replaceChildren(...parts);
+    };
+    bank.addEventListener('input', drawSummary);
+    drawSummary();
+
+    const hide = h('input', { type: 'checkbox', checked: reconHideTicked, onchange: () => { reconHideTicked = hide.checked; draw(); } });
+    const shown = scope.entries.filter((e) => !(reconHideTicked && e.reconciled));
+    const periodText = scope.kind === 'statement'
+      ? `Entries on the ${longDate(scope.closingDate)} statement`
+      : `${longDate(scope.fromDate)} to ${longDate(scope.closingDate)}`;
+
+    const rows = shown.map(({ tx: t, inPeriod, reconciled }) => {
+      const other = counterpartOf(state.ledger, t);
+      const otherAcc = other ? accountById(other.accountId) : null;
+      const box = h('input', { type: 'checkbox', checked: reconciled, 'aria-label': `Ticked: ${t.description}`, onchange: () => toggle(t.id, box.checked) });
+      return h('li', {}, h('label', { class: `recon-row ${reconciled ? 'is-rec' : ''} ${inPeriod ? '' : 'earlier'}` },
+        box,
+        h('span', { class: 'recon-main' },
+          h('span', { class: 'recon-desc' }, t.description || '(no description)'),
+          h('span', { class: 'muted small' }, shortDate(t.date),
+            otherAcc ? ` · ${t.direction === 'debit' ? '→' : '←'} ${otherAcc.name}` : '',
+            inPeriod ? '' : h('span', { class: 'recon-earlier' }, ' · earlier, not ticked yet'))),
+        h('span', { class: `recon-amt ${t.direction}` }, `${t.direction === 'credit' ? '+' : '−'}${formatPence(t.amount)}`)));
+    });
+
+    dlg.replaceChildren(h('div', { class: 'sheet-body' },
+      h('header', { class: 'sheet-head', style: { '--acc': style.colour } },
+        swatch(account),
+        h('h2', {}, `Reconcile · ${account.name}`),
+        h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
+      h('div', { class: 'field-pair' },
+        periodPicker(),
+        h('label', { class: 'field' }, h('span', {}, credit ? 'Owed on the statement (£)' : 'Bank’s closing balance (£)'), bank)),
+      summary,
+      h('div', { class: 'recon-count' },
+        h('span', {}, h('strong', {}, `${scope.tickedCount} of ${scope.totalCount}`), ' ticked · ', periodText,
+          scope.earlierUnticked ? ` · plus ${scope.earlierUnticked} earlier` : ''),
+        h('label', { class: 'check small' }, hide, 'Hide ticked')),
+      rows.length
+        ? h('ul', { class: 'recon-rows' }, rows)
+        : h('p', { class: 'muted small' }, scope.totalCount ? 'Everything here is ticked.' : 'No entries in this period.'),
+      h('p', { class: 'muted small' }, 'Tick each line you can see on the bank’s statement. Ticks sync to your other devices. Changing a ticked entry’s amount or date later asks first and then unticks it.')));
+  }
+  draw();
+  openDialog(dlg);
 }
 
 /** " · payment 3 of 12" for the next payment not yet confirmed or skipped, or ''. */
