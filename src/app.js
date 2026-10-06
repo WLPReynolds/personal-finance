@@ -4,7 +4,13 @@
  * Desktop: spreadsheet-style grid (Date/Description frozen, Credit/Debit/Balance per account).
  * Data: IndexedDB on this device; export/import a JSON file to move it between devices.
  */
-import { loadLedger, saveLedger, loadMeta, saveMeta, loadSyncState, saveSyncState, loadBankHolidays, saveBankHolidays, requestPersistence } from './store.js';
+import {
+  loadLedger, saveLedger, loadMeta, saveMeta, loadSyncState, saveSyncState, loadBankHolidays, saveBankHolidays, requestPersistence,
+  loadVaultHeader, saveVaultHeader, setVaultKey, rekeyAll, wipeDevice, flushWrites, loadAuthCache, saveAuthCache,
+} from './store.js';
+import {
+  createVault, unlockVault, changePassphrase, passphraseProblem, isVaultHeader, AUTO_LOCK_CHOICES, DEFAULT_AUTO_LOCK, MIN_PASSPHRASE_LENGTH,
+} from './lib/vault.js';
 import { googleAuth } from './google-auth.js';
 import { googleDrive } from './drive.js';
 import { createSyncEngine } from './lib/sync-engine.js';
@@ -33,7 +39,7 @@ import {
   isReconciled, setReconciled, reconcileScope, reconcileDifference, defaultPeriod, reconcilesByStatement,
 } from './lib/reconcile.js';
 
-export const APP_VERSION = '0.9.0';
+export const APP_VERSION = '0.10.0';
 
 const state = {
   ledger: null,
@@ -48,6 +54,7 @@ const state = {
   horizonMonths: 3,
   holidays: new Set(BUILT_IN_BANK_HOLIDAYS),
   holidayInfo: { source: 'built-in', fetchedAt: null, lastYear: lastKnownYear(BUILT_IN_BANK_HOLIDAYS) },
+  vault: null, // v0.10: the passphrase lock's header while it's on (this device only)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -1824,6 +1831,8 @@ function renderSettings() {
       h('p', { class: 'muted small' }, 'Auto = grid on wide screens, list on phones.'),
       viewChoice),
 
+    lockSection(),
+
     h('section', { class: 'settings-section' },
       h('h3', {}, 'This device'),
       h('p', { class: 'muted small' }, `${l.transactions.length} entries across ${l.accounts.length} accounts on this device.`),
@@ -2037,6 +2046,7 @@ sync.onChange(renderSyncChip);
 // Sync when returning to the app, and push when leaving it — both only with
 // a still-valid sign-in (never opens Google's window by itself).
 document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && lockIfIdle()) return;
   if (!state.ledger || !sync.isEnabled()) return;
   if (document.visibilityState === 'hidden') { clearTimeout(syncTimer); sync.sync(); }
   else { renderSyncChip(); sync.sync().then(afterSync); }
@@ -2074,9 +2084,271 @@ $('installBtn').addEventListener('click', async () => {
   render();
 });
 
+// ------------------------------------------------------------------ v0.10 passphrase lock
+// Desktop only in practice: it's off unless turned on in ⚙ on this device,
+// and it never syncs. With it on, everything this device saves is
+// encrypted (store.js + lib/vault.js), the app opens on the lock screen,
+// and it locks itself after a spell without use. Locking reloads the page,
+// which is the surest way to drop every trace of the data from memory.
+
+const LOCK_REASON_KEY = 'ft.lockReason';
+let lastActivity = Date.now();
+let locking = false;
+// not 'scroll': the app scrolls itself on redraws
+for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) {
+  addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true, capture: true });
+}
+function autoLockMs() {
+  return (state.vault?.autoLockMinutes ?? DEFAULT_AUTO_LOCK) * 60 * 1000;
+}
+/** Lock if the lock is on and nothing has happened for the auto-lock time. True if locking. */
+function lockIfIdle() {
+  if (!state.vault || locking) return locking;
+  if (Date.now() - lastActivity < autoLockMs()) return false;
+  lockNow(`Locked after ${state.vault.autoLockMinutes} minutes without use`);
+  return true;
+}
+setInterval(lockIfIdle, 10 * 1000);
+
+async function lockNow(reason = '') {
+  if (locking) return;
+  locking = true;
+  // Hide everything at once; then let saves finish and (with a valid
+  // sign-in) push to Drive — briefly, the next unlock syncs anyway.
+  for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  app.replaceChildren(h('div', { class: 'empty' }, 'Locking…'));
+  document.body.classList.add('locked');
+  clearTimeout(syncTimer);
+  try {
+    await flushWrites();
+    if (sync.isEnabled() && auth.hasValidToken()) await Promise.race([sync.sync(), new Promise((r) => setTimeout(r, 4000))]);
+    await flushWrites();
+  } catch { /* the data is saved locally either way */ }
+  setVaultKey(null);
+  try { if (reason) sessionStorage.setItem(LOCK_REASON_KEY, reason); } catch { /* ignore */ }
+  location.reload();
+}
+
+function setTopbarLocked(locked) {
+  document.body.classList.toggle('locked', locked);
+  $('lockBtn').hidden = locked || !state.vault;
+}
+
+function showLockScreen(header) {
+  setTopbarLocked(true);
+  let reason = '';
+  try { reason = sessionStorage.getItem(LOCK_REASON_KEY) ?? ''; sessionStorage.removeItem(LOCK_REASON_KEY); } catch { /* ignore */ }
+  const pass = h('input', { type: 'password', id: 'unlockPass', autocomplete: 'current-password', required: true, 'aria-label': 'Passphrase' });
+  const msg = h('p', { class: 'small', role: 'alert' });
+  const btn = h('button', { type: 'submit', class: 'btn-primary' }, 'Unlock');
+  const form = h('form', {
+    class: 'lock-form',
+    onsubmit: async (e) => {
+      e.preventDefault();
+      if (!pass.value) return;
+      btn.disabled = true;
+      btn.textContent = 'Unlocking…';
+      msg.textContent = '';
+      msg.className = 'small';
+      let key = null;
+      try { key = await unlockVault(header, pass.value); } catch (err) { msg.textContent = err.message; }
+      if (!key) {
+        if (!msg.textContent) msg.textContent = 'That passphrase isn’t right.';
+        msg.className = 'small neg';
+        btn.disabled = false;
+        btn.textContent = 'Unlock';
+        pass.select();
+        pass.focus();
+        return;
+      }
+      pass.value = '';
+      setVaultKey(key);
+      state.vault = header;
+      lastActivity = Date.now();
+      setTopbarLocked(false);
+      boot();
+    },
+  },
+  h('label', { class: 'field' }, h('span', {}, 'Passphrase'), pass),
+  msg,
+  btn);
+  app.replaceChildren(h('div', { class: 'setup lock-screen' },
+    h('div', { class: 'card' },
+      h('div', { class: 'lock-icon', 'aria-hidden': 'true' }, lockSvg(28)),
+      h('h2', {}, 'Locked'),
+      h('p', { class: 'muted small' }, reason || 'Your finance data on this device is encrypted. Enter your passphrase to open it.'),
+      form),
+    h('p', { class: 'muted small center' },
+      h('button', { type: 'button', class: 'btn-link', onclick: forgotPassphrase }, 'Forgot your passphrase?'))));
+  pass.focus();
+}
+
+function forgotPassphrase() {
+  const ok = confirm('Reset this device?\n\nWithout the passphrase the data here can’t be opened, so it will be DELETED from this device and the lock removed.\n\nYour Google Drive copy and its backups are NOT touched — connect Drive again afterwards (⚙ → Connect Google Drive) to load everything back. Only changes made here that hadn’t synced yet are lost.');
+  if (!ok) return;
+  (async () => {
+    auth.clearToken?.();
+    auth.forgetLocalToken?.();
+    await wipeDevice();
+    location.reload();
+  })().catch((err) => alert(`Couldn’t reset: ${err.message}`));
+}
+
+function lockSvg(size = 20) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', size);
+  svg.setAttribute('height', size);
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('fill', 'currentColor');
+  path.setAttribute('d', 'M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5Zm-3 5a3 3 0 1 1 6 0v3H9V7Zm3 7a2 2 0 0 1 1 3.73V19h-2v-1.27A2 2 0 0 1 12 14Z');
+  svg.append(path);
+  return svg;
+}
+
+/** Keep the Google token encrypted with the data (not in localStorage) while the lock is on. */
+function tokenStoreFor(on) {
+  auth.useTokenStore?.(on ? { save: (c) => saveAuthCache(c) } : null);
+}
+
+function lockSection() {
+  const v = state.vault;
+  if (!v) {
+    return h('section', { class: 'settings-section' },
+      h('h3', {}, 'Passphrase lock'),
+      h('p', { class: 'muted small' }, 'Off. Turn it on for a computer others can use: the data this browser keeps is encrypted, the app asks for your passphrase when it opens, and it locks itself when left alone. Just for this device — your phone and Drive aren’t affected.'),
+      h('button', { type: 'button', class: 'btn-secondary', onclick: () => openLockDialog('on') }, 'Turn on passphrase lock…'));
+  }
+  const minutes = h('select', {
+    'aria-label': 'Lock after',
+    onchange: async (e) => {
+      const next = { ...state.vault, autoLockMinutes: Number(e.target.value) };
+      try {
+        await saveVaultHeader(next);
+        state.vault = next;
+        lastActivity = Date.now();
+        toast(`Locks after ${next.autoLockMinutes} minutes without use`);
+      } catch (err) { toast(`Couldn’t save: ${err.message}`, 'error'); }
+    },
+  }, AUTO_LOCK_CHOICES.map((m) => h('option', { value: String(m), selected: m === v.autoLockMinutes }, `${m} minutes`)));
+  return h('section', { class: 'settings-section' },
+    h('h3', {}, 'Passphrase lock'),
+    h('p', { class: 'small' }, 'On · this device’s data is encrypted'),
+    h('label', { class: 'field field-row' }, h('span', {}, 'Lock after this long without use'), minutes),
+    h('div', { class: 'btn-row' },
+      h('button', { type: 'button', class: 'btn-primary', onclick: () => lockNow() }, 'Lock now'),
+      h('button', { type: 'button', class: 'btn-secondary', onclick: () => openLockDialog('change') }, 'Change passphrase…'),
+      h('button', { type: 'button', class: 'btn-secondary', onclick: () => openLockDialog('off') }, 'Turn off…')),
+    h('p', { class: 'muted small' }, 'Exports you download are NOT encrypted — delete them from Downloads when you’re done. Drive backups are as safe as your Google account.'));
+}
+
+/** mode: 'on' | 'change' | 'off' */
+function openLockDialog(mode) {
+  const dlg = $('lockDialog');
+  const pw = (id, label, autocomplete) => {
+    const input = h('input', { type: 'password', id, autocomplete, required: true });
+    return { input, field: h('label', { class: 'field' }, h('span', {}, label), input) };
+  };
+  const current = mode === 'on' ? null : pw('lockCurrent', 'Current passphrase', 'current-password');
+  const fresh = mode === 'off' ? null : pw('lockNew', mode === 'change' ? 'New passphrase' : 'Passphrase', 'new-password');
+  const again = mode === 'off' ? null : pw('lockAgain', 'Type it again', 'new-password');
+  const minutes = mode === 'on'
+    ? h('select', { id: 'lockMinutes' }, AUTO_LOCK_CHOICES.map((m) => h('option', { value: String(m), selected: m === DEFAULT_AUTO_LOCK }, `${m} minutes`)))
+    : null;
+  const msg = h('p', { class: 'small neg', role: 'alert' });
+  const submit = h('button', { type: 'submit', class: mode === 'off' ? 'btn-danger' : 'btn-primary' },
+    { on: 'Turn on', change: 'Change passphrase', off: 'Turn off the lock' }[mode]);
+  const fail = (text) => { msg.textContent = text; submit.disabled = false; submit.textContent = submit.dataset.label; };
+  submit.dataset.label = submit.textContent;
+
+  const form = h('form', {
+    class: 'sheet-body',
+    onsubmit: async (e) => {
+      e.preventDefault();
+      msg.textContent = '';
+      if (fresh) {
+        const problem = passphraseProblem(fresh.input.value, again.input.value);
+        if (problem) return fail(problem);
+      }
+      submit.disabled = true;
+      submit.textContent = 'Working…';
+      try {
+        if (mode === 'on') {
+          const { header, key } = await createVault(fresh.input.value, { autoLockMinutes: Number(minutes.value) });
+          await rekeyAll(header, key); // everything re-saved encrypted, in one go
+          state.vault = header;
+          tokenStoreFor(true);
+          lastActivity = Date.now();
+          $('lockBtn').hidden = false;
+          dlg.close();
+          renderSettings();
+          toast('Passphrase lock is on');
+        } else if (mode === 'change') {
+          const next = await changePassphrase(state.vault, current.input.value, fresh.input.value);
+          if (!next) return fail('The current passphrase isn’t right');
+          await saveVaultHeader(next);
+          state.vault = next;
+          dlg.close();
+          toast('Passphrase changed');
+        } else {
+          if (!(await unlockVault(state.vault, current.input.value))) return fail('That passphrase isn’t right');
+          await rekeyAll(null, null); // everything re-saved as plain data
+          state.vault = null;
+          tokenStoreFor(false);
+          $('lockBtn').hidden = true;
+          dlg.close();
+          renderSettings();
+          toast('Passphrase lock is off');
+        }
+      } catch (err) {
+        fail(`Couldn’t do that: ${err.message}`);
+      }
+    },
+  },
+  h('header', { class: 'sheet-head' },
+    h('h2', {}, { on: 'Turn on passphrase lock', change: 'Change passphrase', off: 'Turn off passphrase lock' }[mode]),
+    h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
+  mode === 'on' ? h('p', { class: 'muted small' }, `Pick something you’ll remember — at least ${MIN_PASSPHRASE_LENGTH} characters; a few unrelated words work well.`) : null,
+  mode === 'on' ? h('p', { class: 'warn small' }, 'There’s no way to recover a forgotten passphrase. If that happens, “Forgot your passphrase?” on the lock screen clears this device and you reload everything from Google Drive — only changes that hadn’t synced yet would be lost.') : null,
+  mode === 'off' ? h('p', { class: 'muted small' }, 'The data on this device will be saved unencrypted again, and the app will open without asking.') : null,
+  current?.field, fresh?.field, again?.field,
+  minutes ? h('label', { class: 'field field-row' }, h('span', {}, 'Lock after this long without use'), minutes) : null,
+  msg,
+  h('div', { class: 'sheet-actions' },
+    h('button', { type: 'button', class: 'btn-secondary', onclick: () => dlg.close() }, 'Cancel'),
+    submit));
+  dlg.replaceChildren(form);
+  openDialog(dlg);
+  (current ?? fresh).input.focus();
+}
+
+$('lockBtn').addEventListener('click', () => lockNow());
+
 async function start() {
   $('brandVersion').textContent = `v${APP_VERSION}`;
+  let header = null;
   try {
+    header = await loadVaultHeader();
+  } catch (err) {
+    app.replaceChildren(h('div', { class: 'card' }, h('h2', {}, 'Storage unavailable'), h('p', {}, `This browser blocked local storage (${err.message}). Private/incognito windows often do this.`)));
+    return;
+  }
+  if (isVaultHeader(header)) {
+    auth.clearToken?.(); // a token must never sit in localStorage while the lock is on
+    showLockScreen(header);
+    return;
+  }
+  boot();
+}
+
+async function boot() {
+  try {
+    if (state.vault) {
+      auth.restoreToken?.(await loadAuthCache());
+      tokenStoreFor(true);
+      $('lockBtn').hidden = false;
+    }
     state.ledger = (await loadLedger()) ?? emptyLedger();
     state.meta = await loadMeta();
   } catch (err) {

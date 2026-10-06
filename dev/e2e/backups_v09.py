@@ -4,6 +4,7 @@ emulator, the Backups list / preview / restore with a second device following,
 and the recurring manager's Expired section.
 Clock starts Tue 6 Oct 2026. Run: python3 dev/e2e/backups_v09.py"""
 from common import *
+APP_V = re.search(r"APP_VERSION = '([^']+)'", open(os.path.join(ROOT, 'src', 'app.js')).read()).group(1)
 from playwright.sync_api import sync_playwright
 import datetime
 
@@ -60,7 +61,7 @@ try:
 
         # ---- header
         check('header says Personal Finance', phone.text_content('.brand').strip() == 'Personal Finance', phone.text_content('.brand'))
-        check('version under the header', phone.text_content('#brandVersion') == 'v0.9.0', phone.text_content('#brandVersion'))
+        check('version under the header', phone.text_content('#brandVersion') == f'v{APP_V}', phone.text_content('#brandVersion'))
         check('no TEST badge', phone.locator('.badge-test').count() == 0 and 'test' not in phone.text_content('.topbar').lower())
         bar_h = phone.evaluate('document.querySelector(".topbar").getBoundingClientRect().height')
         check('top bar height unchanged (57px, phone day headings rely on it)', abs(bar_h - 57) < 0.6, bar_h)
@@ -73,7 +74,7 @@ try:
         check('settings: Test data section gone', 'Test data' not in st)
         check('settings: This device section with erase', 'This device' in st and 'Erase all data on this device' in st)
         check('settings: backups need Drive sync', 'Automatic backups' in st and 'Need Google Drive sync' in st)
-        check('settings footer name', 'Personal Finance v0.9.0' in st)
+        check('settings footer name', f'Personal Finance v{APP_V}' in st)
         phone.click('#settingsDialog button:has-text("Connect Google Drive")')
         phone.wait_for_function('() => /Synced/.test(document.getElementById("syncChip").textContent)', timeout=8000)
         phone.wait_for_timeout(200)
@@ -110,7 +111,7 @@ try:
         desk.wait_for_selector('table.grid', timeout=8000)
         if desk.is_visible('#settingsDialog[open]'): close_settings(desk)
         check('desktop shows the mistake', 'Mistake' in desk.text_content('table.grid'))
-        check('desktop header + version', desk.text_content('.brand') == 'Personal Finance' and desk.text_content('#brandVersion') == 'v0.9.0')
+        check('desktop header + version', desk.text_content('.brand') == 'Personal Finance' and desk.text_content('#brandVersion') == f'v{APP_V}')
         desk.screenshot(path=f'{OUT}/v09-2-desk-header.png', clip={'x': 0, 'y': 0, 'width': 1440, 'height': 160})
 
         # ---- phone: Backups list

@@ -4,11 +4,38 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.9.0 — Automatic backups; Expired recurring items
+## Status: v0.10.0 — Passphrase lock for desktop browsers
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**New in v0.10.0 — passphrase lock (for computers others can use)**
+- **Off unless you turn it on, and only for the device you turn it on in.**
+  Phones carry on as before (the phone's own fingerprint lock is the guard
+  there). It never syncs and Drive is not encrypted.
+- **⚙ → Passphrase lock → Turn on…**: choose a passphrase (8+ characters; a
+  few unrelated words work well) and how long without use before it locks
+  itself (5 / 15 / 30 / 60 minutes, default 15).
+- With it on, everything the app keeps in this browser is **encrypted** — the
+  ledger, the last-synced copy, sync details, the bank-holiday list, and the
+  Google sign-in token (moved out of localStorage). The browser's built-in
+  Web Crypto does it: PBKDF2-SHA256 with 600,000 rounds turns the passphrase
+  into a key that unlocks a random AES-256-GCM data key. Without the
+  passphrase the stored data can't be read, developer tools included.
+- The app opens on a **lock screen**. It locks again after the chosen time
+  without use, from the padlock in the top bar (desktop widths) or **⚙ → Lock
+  now**. Locking finishes any saves, syncs if signed in, then reloads the page
+  so nothing is left in memory. Closing the browser locks it too.
+- **Change passphrase…** and **Turn off…** ask for the current passphrase.
+  Turning off saves the data unencrypted again.
+- **Forgot your passphrase?** on the lock screen deletes this device's data
+  (it can't be opened without the passphrase) and removes the lock. Drive and
+  its backups aren't touched: reconnect Drive to load everything back. Only
+  changes made here that hadn't synced are lost.
+- Not covered: what's on screen while it's unlocked (hence the auto-lock),
+  exports you download (plain JSON — delete them from Downloads), and anything
+  watching the screen or keyboard on a managed work laptop.
 
 **New in v0.9.0 — automatic backups**
 - With Drive sync on, once a day — just before that day's first save to Drive —
@@ -228,7 +255,8 @@ just clears the old offline cache.
 
 - `index.html`, `styles.css`, `manifest.webmanifest`, `sw.js`, `icons/`
 - `src/app.js` — all UI (list view, grid view, dialogs, settings, export/import)
-- `src/store.js` — IndexedDB load/save (ledger, meta, sync state)
+- `src/store.js` — IndexedDB load/save (ledger, meta, sync state); encrypts every record while the passphrase lock is on (v0.10)
+- `src/lib/vault.js` — passphrase lock: key derivation, key wrapping, value encryption (v0.10)
 - `src/google-auth.js` — Google sign-in (GIS token client; tap-only)
 - `src/drive.js` — Drive REST adapter (find/create folder+file, download, save)
 - `src/lib/sync-engine.js` — sync orchestration (push / pull / merge / clashes / lost-save recovery)
@@ -272,5 +300,5 @@ just clears the old offline cache.
 npm test
 ```
 
-162 tests (incl. two-device sync + stress test, recurring items, card statements, reconciling), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py` (and the others in `dev/e2e/`).
+191 tests (incl. two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py` (and the others in `dev/e2e/`).

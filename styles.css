@@ -104,7 +104,7 @@ button, input, select { font: inherit; color: inherit; }
 .field > span:first-child { font-size: 13px; color: var(--muted); font-weight: 500; }
 .field-row { grid-template-columns: 1fr 130px; align-items: center; }
 .field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-input[type="text"], input[type="date"], input[type="number"], select {
+input[type="text"], input[type="date"], input[type="number"], input[type="password"], select {
   width: 100%; min-height: 44px; padding: 8px 10px; border-radius: 10px;
   border: 1px solid var(--line-strong); background: var(--surface);
 }
@@ -407,3 +407,15 @@ body.mode-grid .toast { bottom: 24px; }
 .backup-compare th:first-child, .backup-compare td:first-child { text-align: left; }
 .backup-compare thead th { font-size: 12px; color: var(--muted); font-weight: 600; }
 .backup-compare .differs td { font-weight: 700; }
+
+/* ---- v0.10 passphrase lock */
+body.locked .topbar-actions, body.locked #fab { display: none !important; }
+.lock-screen { margin-top: 12vh; max-width: 400px; }
+.lock-screen .card { display: grid; gap: 6px; }
+.lock-screen .card h2 { margin: 0; }
+.lock-icon { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--primary); border: 1px solid var(--line); }
+.lock-form { display: grid; gap: 12px; margin-top: 8px; }
+.lock-screen [role="alert"]:empty { display: none; }
+#lockDialog [role="alert"]:empty { display: none; }
+/* the phone top bar has no room (and must stay 57px); Lock now is in ⚙ there */
+@media (max-width: 460px) { #lockBtn { display: none !important; } }

@@ -11,7 +11,9 @@
  * Lessons carried over from the ticket tracker:
  *  - error_callback is always wired, and every request has a timeout, so a
  *    closed/blocked window can't leave a promise hanging forever;
- *  - the token is cached across reloads (localStorage, this device only);
+ *  - the token is cached across reloads (localStorage, this device only —
+ *    or, with the v0.10 passphrase lock on, encrypted in the app's own
+ *    storage via useTokenStore(), never in localStorage);
  *  - login_hint skips the account picker once we know which account;
  *  - requestAccessToken is called synchronously from the tap (callers must not
  *    await anything before calling getToken({ interactive: true })).
@@ -37,11 +39,36 @@ let lastError = null;
   } catch { /* no cache */ }
 })();
 
+let tokenStore = null; // v0.10: { save(cache|null) } while the passphrase lock is on
+
 function saveCache() {
+  const c = token && expiry > Date.now() ? { token, expiry } : null;
+  if (tokenStore) {
+    Promise.resolve().then(() => tokenStore?.save(c)).catch(() => { /* not critical */ });
+    return;
+  }
   try {
-    if (token && expiry > Date.now()) localStorage.setItem(TOKEN_KEY, JSON.stringify({ token, expiry }));
+    if (c) localStorage.setItem(TOKEN_KEY, JSON.stringify(c));
     else localStorage.removeItem(TOKEN_KEY);
   } catch { /* not critical */ }
+}
+
+/**
+ * v0.10 passphrase lock. useTokenStore(store) keeps the token in `store`
+ * (encrypted) and removes it from localStorage; useTokenStore(null) goes
+ * back to localStorage. restoreToken() puts back a token read from that store.
+ */
+export function useTokenStore(store) {
+  tokenStore = store ?? null;
+  if (tokenStore) { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } }
+  saveCache();
+}
+export function restoreToken(c) {
+  if (c && typeof c.token === 'string' && c.expiry > Date.now()) { token = c.token; expiry = c.expiry; }
+}
+/** Drop any token cached in localStorage (it may predate turning the lock on). */
+export function forgetLocalToken() {
+  try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ }
 }
 
 function loginHint() {
@@ -162,4 +189,4 @@ export function setLoginHint(email) {
   } catch { /* not critical */ }
 }
 
-export const googleAuth = { getToken, hasValidToken, clearToken, setLoginHint, lastAuthError, preload: loadGoogleScript };
+export const googleAuth = { getToken, hasValidToken, clearToken, setLoginHint, lastAuthError, preload: loadGoogleScript, useTokenStore, restoreToken, forgetLocalToken };
