@@ -4,11 +4,34 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.10.0 — Passphrase lock for desktop browsers
+## Status: v0.11.0 — Amounts from the ticket tracker
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**New in v0.11.0 — amounts from the ticket tracker**
+- The ticket tracker publishes its "Set aside on payday" figure for the
+  current pay period and the next 12 as one file in Drive,
+  `transport-estimates.json` (contract: `claude/transport-estimates-spec.md`
+  in the Project — the tracker side is built in the tracker's own Project).
+- A recurring item's editor has **Take the amount from the ticket tracker**
+  (Train fare/Parking). Each projected month then uses the tracker's total for
+  the pay period starting that month — matched by month, so December's early
+  pay or a bank-holiday difference doesn't matter. The amount typed in is
+  used only for a month the tracker has no figure for.
+- Projected rows say **projected · ticket tracker** or **projected · estimate
+  (no tracker figure)**. Tapping one shows the breakdown (tickets + parking
+  days) and whether it's locked in on payday or still a projection.
+  Confirming is still your tap; a confirmed entry never changes afterwards.
+  "Save for this month only", Skip and Undo work as before.
+- The file is read after a sync (at most every 5 minutes; **⚙ → Ticket
+  tracker → Check now** any time). It needs Drive sync on. Only a device whose
+  ledger has an item using it ever looks for the file.
+- The figures are kept on this device only (encrypted with the lock on) —
+  never in the ledger or the Drive file — so offline still works. A missing or
+  bad file keeps the last good figures and says why in ⚙. A newer format
+  version than this app reads is refused rather than guessed at.
 
 **New in v0.10.0 — passphrase lock (for computers others can use)**
 - **Off unless you turn it on, and only for the device you turn it on in.**
@@ -257,6 +280,7 @@ just clears the old offline cache.
 - `src/app.js` — all UI (list view, grid view, dialogs, settings, export/import)
 - `src/store.js` — IndexedDB load/save (ledger, meta, sync state); encrypts every record while the passphrase lock is on (v0.10)
 - `src/lib/vault.js` — passphrase lock: key derivation, key wrapping, value encryption (v0.10)
+- `src/lib/tracker-estimates.js` — the ticket tracker's published figures: file checks, lookup by month, reading from Drive (v0.11)
 - `src/google-auth.js` — Google sign-in (GIS token client; tap-only)
 - `src/drive.js` — Drive REST adapter (find/create folder+file, download, save)
 - `src/lib/sync-engine.js` — sync orchestration (push / pull / merge / clashes / lost-save recovery)

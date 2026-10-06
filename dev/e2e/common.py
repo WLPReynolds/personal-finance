@@ -60,6 +60,9 @@ def handle(route, request):
             in_parent = f"'{f['parent'] or 'root'}' in parents" in q
             if "mimeType='application/vnd.google-apps.folder'" in q:
                 if f['folder'] and f"name='{f['name']}'" in q and in_parent: res.append({'id': fid})
+            elif "in parents" not in q:  # v0.11: by name anywhere (the ticket tracker's file)
+                if not f['folder'] and f"name='{f['name']}'" in q:
+                    res.append({'id': fid, 'version': str(f['version'])})
             elif "name=" not in q:  # v0.9: list a folder (backups)
                 if not f['folder'] and in_parent:
                     res.append({'id': fid, 'name': f['name'], 'createdTime': f.get('created', '')})

@@ -26,6 +26,7 @@
 import { randomUUID } from './id.js';
 import { daysInMonth, shiftToWorkingDay } from './workdays.js';
 import { statementConfig, paymentDueDate, statementFor, addMonths as addStatementMonths } from './statements.js';
+import { TRACKER_SOURCE, trackerPeriodFor } from './tracker-estimates.js';
 
 export const MAX_HORIZON_MONTHS = 12;
 /** "Every N days" bounds. 31 is the smallest gap that can never land twice in one month (see above). */
@@ -56,6 +57,9 @@ export const MAX_EVERY_DAYS = 366;
  *                                         payment due date (statements.js). day/shift/everyMonths are then ignored, and
  *                                         `amount` is only an estimate for a statement from before the card's records start.
  *                                         The payment for month P pays the statement produced the month before.
+ * @property {'ticket-tracker'|null} [amountFrom] - v0.11: take each projected month's amount from the ticket tracker's
+ *                                         published figure for the period paid that month (tracker-estimates.js); `amount`
+ *                                         is then the fallback. Not with payStatement. Absent/null = off.
  * @property {string} createdAt
  */
 
@@ -265,11 +269,16 @@ export const numberLabel = (no) => (no ? `(${no.n} of ${no.of})` : '');
  * whose date has passed without being confirmed ("overdue"), and skipped
  * ones (shown struck through; they don't count towards balances).
  *
+ * sources (v0.11, optional): { tracker } — the ticket tracker's published
+ * figures (tracker-estimates.js), for items with amountFrom 'ticket-tracker'.
+ * Such a projection carries amountSource 'tracker' (+ tracker: the period) or
+ * 'fallback' (no figure for that month — the item's own amount).
+ *
  * @returns {Array<{ key: string, itemId: string, period: string, date: string, seriesDate: string,
  *   amount: number, description: string, kind: string, accountId: string, toAccountId: string|null,
  *   skipped: boolean, changed: boolean, seriesAmount: number, number: {n:number, of:number}|null }>}
  */
-export function projections(ledger, toIso, holidays) {
+export function projections(ledger, toIso, holidays, sources = {}) {
   const confirmed = confirmedKeys(ledger);
   const exceptions = new Map(occurrenceExceptions(ledger).map((e) => [e.id, e]));
   const out = [];
@@ -302,10 +311,24 @@ export function projections(ledger, toIso, holidays) {
     const card = statementCardFor(item, ledger.accounts);
     if (card) { statementItems.push({ item, card }); continue; }
     const numbering = seriesNumbering(item, skippedPeriodsFor(ledger, item.id, confirmed));
+    const fromTracker = item.amountFrom === TRACKER_SOURCE;
     for (const { period, date } of seriesDates(item, toIso, holidays)) {
       if (confirmed.has(`${item.id}|${period}`)) continue;
-      const p = projectionFor(item, period, date, seriesAmount(item, period, numbering), numbering);
-      if (p) out.push(p);
+      let amount = seriesAmount(item, period, numbering);
+      let extra = {};
+      if (fromTracker) {
+        const tp = trackerPeriodFor(sources.tracker, period);
+        if (tp) {
+          amount = tp.totalPence;
+          extra = { amountSource: 'tracker', tracker: { ...tp, generatedAt: sources.tracker.generatedAt } };
+        } else {
+          extra = { amountSource: 'fallback' };
+        }
+      }
+      const p = projectionFor(item, period, date, amount, numbering, extra);
+      if (!p) continue;
+      if (fromTracker && p.amount <= 0 && !p.skipped) continue; // the tracker says nothing to set aside
+      out.push(p);
     }
   }
 
@@ -371,17 +394,17 @@ function projectionLegs(p) {
  * Looks 62 days past the end date so a last payment moved a little later by a
  * one-off date still counts as outstanding.
  */
-export function seriesFinished(ledger, item, holidays) {
+export function seriesFinished(ledger, item, holidays, sources = {}) {
   if (!item?.endDate) return false;
   const d = new Date(`${item.endDate}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 62);
   const to = d.toISOString().slice(0, 10);
-  return !projections(ledger, to, holidays).some((p) => p.itemId === item.id && !p.skipped);
+  return !projections(ledger, to, holidays, sources).some((p) => p.itemId === item.id && !p.skipped);
 }
 
-export function withProjections(ledger, toIso, holidays) {
+export function withProjections(ledger, toIso, holidays, sources = {}) {
   const accountIds = new Set(ledger.accounts.map((a) => a.id));
-  const legs = projections(ledger, toIso, holidays)
+  const legs = projections(ledger, toIso, holidays, sources)
     .flatMap(projectionLegs)
     .filter((t) => accountIds.has(t.accountId));
   // confirmed entries of a numbered series get their "(x of y)" too — worked
@@ -452,6 +475,7 @@ function cleanItemFields(f) {
     finalAmount: f.payStatement ? null : f.finalAmount ?? null,
     firstNumber: f.firstNumber ?? 1,
     payStatement,
+    amountFrom: !payStatement && f.amountFrom === TRACKER_SOURCE ? TRACKER_SOURCE : null,
   };
 }
 

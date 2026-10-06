@@ -6,7 +6,8 @@
  * Saving the whole ledger each time is fine at this size (a year of the
  * Budget sheet is ~400 rows ≈ 150 KB of JSON). When Drive sync arrives it
  * slots in behind loadLedger/saveLedger.
- *   'sync', 'bankHolidays', 'auth' (v0.10), and 'vault' (v0.10 lock header)
+ *   'sync', 'bankHolidays', 'auth' (v0.10), 'vault' (v0.10 lock header),
+ *   'trackerEstimates' (v0.11)
  */
 import { encryptValue, decryptValue, isEncryptedValue } from './lib/vault.js';
 
@@ -32,7 +33,7 @@ function openDb() {
 // and `vaultKey` holds the data key in memory while unlocked. The lock's
 // header ('vault') is the one record always saved in plain view.
 const VAULT = 'vault';
-const DATA_KEYS = ['ledger', 'meta', 'sync', 'bankHolidays', 'auth'];
+const DATA_KEYS = ['ledger', 'meta', 'sync', 'bankHolidays', 'auth', 'trackerEstimates'];
 let vaultKey = null;
 
 export class LockedError extends Error {
@@ -102,6 +103,10 @@ export const saveBankHolidays = (value) => put('bankHolidays', value);
 /** v0.10: the Google sign-in token, kept here (encrypted) instead of localStorage while the lock is on. */
 export const loadAuthCache = () => get('auth');
 export const saveAuthCache = (value) => put('auth', value);
+
+/** v0.11: the ticket tracker's published figures, as last read from Drive (this device only — see lib/tracker-estimates.js). */
+export const loadTrackerEstimates = () => get('trackerEstimates');
+export const saveTrackerEstimates = (value) => put('trackerEstimates', value);
 
 export const loadVaultHeader = () => rawGet(VAULT);
 

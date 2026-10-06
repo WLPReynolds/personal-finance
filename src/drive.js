@@ -73,6 +73,18 @@ export const googleDrive = {
     return f ? { id: f.id, version: String(f.version) } : null;
   },
 
+  /**
+   * v0.11: files called `name` anywhere this app can see (oldest first) → [{ id, version }].
+   * Used for the ticket tracker's transport-estimates.json — it shares this
+   * app's Google client, so its files are visible under drive.file.
+   */
+  async findFilesByName(token, name) {
+    const query = `name=${lit(name)} and trashed=false`;
+    const resp = await call(token, `${API}/files?q=${q(query)}&fields=files(id,version)&orderBy=createdTime&spaces=drive`);
+    if (!resp.ok) throw await failed(resp, 'file search');
+    return ((await resp.json()).files ?? []).map((f) => ({ id: f.id, version: String(f.version) }));
+  },
+
   async download(token, id) {
     const resp = await call(token, `${API}/files/${id}?alt=media`);
     if (!resp.ok) throw await failed(resp, 'download');

@@ -42,7 +42,12 @@ const HISTORY_LENGTH = 100;
  * against pushedFrom instead of fast-forwarding, and its changes come back.
  */
 
-export function createSyncEngine({ auth, drive, store, folderName = DRIVE_FOLDER_NAME, fileName = DRIVE_FILE_NAME, now = () => new Date() }) {
+/*
+ * v0.11 `afterSync`: optional async (token) => void, run after every sync that
+ * reached Drive (the ticket tracker's figures are read here). Its errors never
+ * affect the sync — it records its own.
+ */
+export function createSyncEngine({ auth, drive, store, folderName = DRIVE_FOLDER_NAME, fileName = DRIVE_FILE_NAME, now = () => new Date(), afterSync = null }) {
   /** Persisted: { enabled, folderId, fileId, baseLedger, baseVersion, lastSyncAt, email } */
   let ss = { enabled: false };
   /** Transient UI state */
@@ -146,6 +151,9 @@ export function createSyncEngine({ auth, drive, store, folderName = DRIVE_FOLDER
     setStatus('syncing');
     try {
       const result = await syncOnce(token);
+      if (afterSync) {
+        try { await afterSync(token); } catch { /* its own business — never fails the sync */ }
+      }
       return result;
     } catch (err) {
       if (err && err.auth) {
@@ -395,8 +403,18 @@ export function createSyncEngine({ auth, drive, store, folderName = DRIVE_FOLDER
     return sync({ interactive: false });
   }
 
+  /**
+   * v0.11: run fn(token) with a Google token — e.g. "Check now" for the
+   * ticket tracker's figures. Call straight from a tap when interactive.
+   */
+  function withSyncToken(fn, { interactive = false } = {}) {
+    if (!ss.enabled) return Promise.reject(new Error('Turn on Drive sync first'));
+    return withToken(auth.getToken({ interactive }), fn);
+  }
+
   return {
     init,
+    withSyncToken,
     sync,
     connect,
     disconnect,

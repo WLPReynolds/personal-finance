@@ -7,6 +7,7 @@
 import {
   loadLedger, saveLedger, loadMeta, saveMeta, loadSyncState, saveSyncState, loadBankHolidays, saveBankHolidays, requestPersistence,
   loadVaultHeader, saveVaultHeader, setVaultKey, rekeyAll, wipeDevice, flushWrites, loadAuthCache, saveAuthCache,
+  loadTrackerEstimates, saveTrackerEstimates,
 } from './store.js';
 import {
   createVault, unlockVault, changePassphrase, passphraseProblem, isVaultHeader, AUTO_LOCK_CHOICES, DEFAULT_AUTO_LOCK, MIN_PASSPHRASE_LENGTH,
@@ -38,8 +39,11 @@ import {
 import {
   isReconciled, setReconciled, reconcileScope, reconcileDifference, defaultPeriod, reconcilesByStatement,
 } from './lib/reconcile.js';
+import {
+  TRACKER_SOURCE, TRACKER_CHECK_MS, refreshTrackerEstimates, usesTracker, trackerPeriodFor,
+} from './lib/tracker-estimates.js';
 
-export const APP_VERSION = '0.10.0';
+export const APP_VERSION = '0.11.0';
 
 const state = {
   ledger: null,
@@ -55,6 +59,7 @@ const state = {
   holidays: new Set(BUILT_IN_BANK_HOLIDAYS),
   holidayInfo: { source: 'built-in', fetchedAt: null, lastYear: lastKnownYear(BUILT_IN_BANK_HOLIDAYS) },
   vault: null, // v0.10: the passphrase lock's header while it's on (this device only)
+  tracker: null, // v0.11: the ticket tracker's figures as last read from Drive (this device only)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -195,7 +200,11 @@ function projectionEnd() {
 /** The ledger plus projected entries from recurring items — for display only, never saved. */
 function viewLedger() {
   const end = projectionEnd();
-  return withStatements(withProjections(state.ledger, end, state.holidays), end, state.holidays);
+  return withStatements(withProjections(state.ledger, end, state.holidays, sources()), end, state.holidays);
+}
+/** v0.11: extra inputs for projections — the ticket tracker's published figures, if read. */
+function sources() {
+  return { tracker: state.tracker?.estimates ?? null };
 }
 function hasRecurring() {
   return recurringItems(state.ledger).length > 0;
@@ -244,7 +253,9 @@ async function loadHolidays() {
 function projectionTags(p, today) {
   if (p.skipped) return { cls: 'skipped', label: 'skipped' };
   if (p.date <= today) return { cls: 'overdue', label: p.date === today ? 'due today · tap to confirm' : 'not confirmed yet' };
-  return { cls: '', label: p.changed ? 'projected · changed for this month' : 'projected' };
+  const from = p.amountSource === 'tracker' && p.amount === p.seriesAmount ? ' · ticket tracker'
+    : p.amountSource === 'fallback' && p.amount === p.seriesAmount ? ' · estimate (no tracker figure)' : '';
+  return { cls: '', label: (p.changed ? 'projected · changed for this month' : 'projected') + from };
 }
 
 // ------------------------------------------------------------------ card statements
@@ -292,9 +303,10 @@ function holidayStatusText() {
 // real app always uses Google's.
 const testHooks = window.__FT_TEST__ ?? null;
 const auth = testHooks?.auth ?? googleAuth;
+const syncDrive = testHooks?.drive ?? googleDrive;
 const sync = createSyncEngine({
   auth,
-  drive: testHooks?.drive ?? googleDrive,
+  drive: syncDrive,
   store: {
     getLocal: () => state.ledger,
     setLocal(ledger) {
@@ -306,7 +318,48 @@ const sync = createSyncEngine({
     loadSyncState,
     saveSyncState,
   },
+  afterSync: (token) => checkTracker(token),
 });
+
+// ------------------------------------------------------------------ v0.11 ticket tracker figures
+
+/**
+ * Read the ticket tracker's published figures from Drive — only when an item
+ * uses them, and at most every few minutes during ordinary syncs. A failure
+ * keeps the last good figures; it's shown in ⚙ and in the editor.
+ */
+async function checkTracker(token, { force = false } = {}) {
+  if (!usesTracker(state.ledger)) return;
+  const last = state.tracker?.checkedAt ? Date.parse(state.tracker.checkedAt) : 0;
+  if (!force && Date.now() - last < TRACKER_CHECK_MS) return;
+  const before = JSON.stringify([state.tracker?.estimates ?? null, state.tracker?.error ?? null]);
+  const rec = await refreshTrackerEstimates({ drive: syncDrive, token, cached: state.tracker });
+  state.tracker = rec;
+  try { await saveTrackerEstimates(rec); } catch { /* keeps working from memory this session */ }
+  if (JSON.stringify([rec.estimates, rec.error]) !== before) {
+    render();
+    if ($('recurringDialog').open) renderRecurringManager();
+  }
+  if ($('settingsDialog').open) renderSettings();
+}
+/** "Check now" (a tap — may open Google's window). */
+function checkTrackerFromTap() {
+  sync.withSyncToken((token) => checkTracker(token, { force: true }), { interactive: true })
+    .then(() => toast(state.tracker?.error ? state.tracker.error : 'Ticket tracker figures checked', state.tracker?.error ? 'error' : undefined))
+    .catch((err) => toast(err.message, 'error'));
+}
+/** "Figures for Sep 2026 – Sep 2027 · shared by the tracker 6 Oct, 19:20" — or why there are none. */
+function trackerStatusText() {
+  const t = state.tracker;
+  if (!sync.isEnabled()) return 'Needs Google Drive sync on — the figures are read from your Drive.';
+  if (!t) return 'Not checked yet — it’s read on the next sync.';
+  const parts = [];
+  const e = t.estimates;
+  if (e) parts.push(`Pay periods ${periodLabel(e.periods[0].paydayMonth)} – ${periodLabel(e.periods[e.periods.length - 1].paydayMonth)}, figures from ${when(e.generatedAt)} (the tracker only rewrites the file when they change).`);
+  if (t.error) parts.push(e ? `Latest check: ${t.error} Still using the figures above.` : t.error);
+  parts.push(`Checked ${when(t.checkedAt)}.`);
+  return parts.join(' ');
+}
 
 let syncTimer = null;
 /** Sync shortly after an edit, if signed in (never opens Google's window). */
@@ -1035,7 +1088,9 @@ function itemStatementCard(item) {
   return statementCardFor(item, state.ledger.accounts);
 }
 function itemAmountText(item) {
-  return itemStatementCard(item) ? 'statement balance' : signedAmount(item.kind, item.amount);
+  if (itemStatementCard(item)) return 'statement balance';
+  if (item.amountFrom === TRACKER_SOURCE) return `from the ticket tracker (else ${signedAmount(item.kind, item.amount)})`;
+  return signedAmount(item.kind, item.amount);
 }
 function itemAccountsText(item) {
   const name = (id) => accountById(id)?.name ?? 'missing account';
@@ -1047,7 +1102,7 @@ function openOccurrenceDialog(itemId, period) {
   const dlg = $('txDialog');
   const item = recurringItems(state.ledger).find((i) => i.id === itemId);
   if (!item) return;
-  const view = withProjections(state.ledger, horizonEnd(todayIso(), MAX_HORIZON_MONTHS + 1), state.holidays);
+  const view = withProjections(state.ledger, horizonEnd(todayIso(), MAX_HORIZON_MONTHS + 1), state.holidays, sources());
   const p = view.transactions.find((t) => t.isProjected && t.scheduledItemId === itemId && t.scheduledPeriod === period)?.projection;
   if (!p) return; // confirmed meanwhile (e.g. by a sync)
   const account = accountById(item.accountId);
@@ -1112,6 +1167,14 @@ function openOccurrenceDialog(itemId, period) {
           : [`Pays the ${longDate(st.date)} statement: ${formatPence(st.owed)} owed${st.date > today ? ' so far (it isn’t produced yet)' : ''}. To pay a different amount this month, change it and tap “Save for this month only”. `,
               h('button', { type: 'button', class: 'btn-link', onclick: () => openStatementDialog(card.id, st.month) }, 'View statement…')])
     : null;
+  const tp = p.tracker ?? null;
+  const trackerLine = p.amountSource === 'tracker'
+    ? h('p', { class: 'stmt-info' },
+        `From the ticket tracker: ${formatPence(tp.totalPence)} for ${longDate(tp.start)} – ${longDate(tp.end)} — ${tp.ticketCount} ticket${tp.ticketCount === 1 ? '' : 's'} (${formatPence(tp.ticketPence)}) + ${tp.parkingDays} parking day${tp.parkingDays === 1 ? '' : 's'} (${formatPence(tp.parkingPence)}). `,
+        tp.status === 'locked' ? 'Locked in on payday.' : `A projection (figures from ${when(tp.generatedAt)}) — it can still change.`)
+    : p.amountSource === 'fallback'
+      ? h('p', { class: 'stmt-info' }, `The ticket tracker has no figure for ${periodLabel(period)}, so this is the item’s own amount. ${trackerStatusText()}`)
+      : null;
   const status = p.skipped
     ? `Skipped for ${periodLabel(period)}.`
     : p.date < today ? `Due ${longDate(p.date)} — not confirmed yet.`
@@ -1130,6 +1193,7 @@ function openOccurrenceDialog(itemId, period) {
           p.number ? ` Payment ${p.number.n} of ${p.number.of}${p.number.n === p.number.of ? ' — the last one' : ''}.` : null,
           p.changed ? h('span', { class: 'muted' }, ` Changed for this month (series: ${longDate(p.seriesDate)}, ${formatPence(p.seriesAmount)}).`) : null),
         stmtLine,
+        trackerLine,
         h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount),
         h('div', { class: 'field-pair' },
           h('label', { class: 'field' }, h('span', {}, 'Date'), date),
@@ -1241,7 +1305,7 @@ function renderRecurringManager() {
   const all = recurringItems(state.ledger).map((item) => ({
     item,
     next: upcomingDates(item, today, 1, state.holidays, itemStatementCard(item))[0] ?? null,
-    finished: seriesFinished(state.ledger, item, state.holidays),
+    finished: seriesFinished(state.ledger, item, state.holidays, sources()),
   }));
   const active = all.filter((x) => !x.finished)
     .sort((a, b) => (a.next ?? '9999').localeCompare(b.next ?? '9999') || a.item.description.localeCompare(b.item.description));
@@ -1255,6 +1319,9 @@ function renderRecurringManager() {
   const row = ({ item, next, finished }) => {
     const acc = accountById(item.accountId);
     const paid = finished ? lastPaid(item) : '';
+    // v0.11: an item on the tracker shows the tracker's figure for its next payment, if it has one
+    const trk = item.amountFrom === TRACKER_SOURCE && !itemStatementCard(item);
+    const nextAmount = (trk && next && trackerPeriodFor(state.tracker?.estimates, next.slice(0, 7))?.totalPence) ?? item.amount;
     const status = finished
       ? (paid ? `Finished · last payment ${longDate(paid)}` : `Finished · ended ${longDate(item.endDate)}`)
       : next ? `Next: ${longDate(next)}${nextNumberText(item)}`
@@ -1263,9 +1330,9 @@ function renderRecurringManager() {
       acc ? swatch(acc) : null,
       h('span', { class: 'rec-main' },
         h('span', { class: 'rec-name' }, item.description),
-        h('span', { class: 'muted small' }, `${describeRule(item, itemStatementCard(item))} · ${itemAccountsText(item)}`),
+        h('span', { class: 'muted small' }, `${describeRule(item, itemStatementCard(item))}${trk ? ' · amount from the ticket tracker' : ''} · ${itemAccountsText(item)}`),
         h('span', { class: 'small' }, status)),
-      h('span', { class: `rec-amt ${item.kind === 'in' ? 'credit' : ''}` }, itemStatementCard(item) ? 'statement' : signedAmount(item.kind, item.amount))));
+      h('span', { class: `rec-amt ${item.kind === 'in' ? 'credit' : ''}` }, itemStatementCard(item) ? 'statement' : signedAmount(item.kind, nextAmount))));
   };
 
   const list = all.length
@@ -1419,7 +1486,7 @@ function openReconcileDialog(accountId, period = null) {
 /** " · payment 3 of 12" for the next payment not yet confirmed or skipped, or ''. */
 function nextNumberText(item) {
   if (!item.endDate) return '';
-  const view = withProjections(state.ledger, item.endDate, state.holidays);
+  const view = withProjections(state.ledger, item.endDate, state.holidays, sources());
   const p = view.transactions.find((t) => t.isProjected && t.scheduledItemId === item.id && !t.skipped && t.date >= todayIso())?.projection;
   return p?.number ? ` · payment ${p.number.n} of ${p.number.of}` : '';
 }
@@ -1454,6 +1521,12 @@ function openRecurringEditor(itemId) {
   const payStmtField = h('div', { class: 'field' }, h('label', { class: 'check' }, payStmt, payStmtText));
   const payStmtHint = h('div', { class: 'muted small' });
   payStmtField.append(payStmtHint);
+  // v0.11: amount from the ticket tracker's published figures
+  const fromTracker = h('input', { type: 'checkbox', checked: existing?.amountFrom === TRACKER_SOURCE });
+  const trackerHint = h('div', { class: 'muted small' });
+  const trackerField = h('div', { class: 'field' },
+    h('label', { class: 'check' }, fromTracker, h('span', {}, 'Take the amount from the ticket tracker (“Set aside on payday”)')),
+    trackerHint);
   const statementCardSelected = () => (kind === 'transfer' ? accountById(toAccount.value) : null);
   const payingStatement = () => payStmt.checked && Boolean(statementConfig(statementCardSelected()));
 
@@ -1494,7 +1567,7 @@ function openRecurringEditor(itemId) {
         amount: amount.value.trim() === '' ? 0 : parseAmount(amount.value), everyMonths: 1, everyDays: null,
         day: Number.parseInt(day.value, 10) || existing?.day || 1,
         startDate: start.value, endDate: end.value || null, shift: 'after', finalAmount: null,
-        firstNumber: existing?.firstNumber ?? 1, payStatement: true,
+        firstNumber: existing?.firstNumber ?? 1, payStatement: true, amountFrom: null,
       };
     }
     const byDays = freq.value === 'd';
@@ -1503,6 +1576,7 @@ function openRecurringEditor(itemId) {
     const everyDays = byDays ? (/^\s*\d+\s*$/.test(nDays.value) ? Number(nDays.value) : NaN) : null;
     return {
       payStatement: false,
+      amountFrom: fromTracker.checked ? TRACKER_SOURCE : null,
       description: desc.value, kind, accountId: account.value, toAccountId: kind === 'transfer' ? toAccount.value : null,
       amount: parseAmount(amount.value), everyMonths, everyDays,
       day: byDays ? Number(start.value.slice(8, 10)) || 1 : Number.parseInt(day.value, 10),
@@ -1528,7 +1602,12 @@ function openRecurringEditor(itemId) {
       : card?.type === 'credit' ? `Set ${card.name}’s statement date first (its Account… button).` : '';
     const stmtOn = payingStatement();
     for (const el of [freqDayPair, shiftField]) el.hidden = stmtOn;
-    amountLabel.textContent = stmtOn ? 'Estimate (£)' : 'Amount (£)';
+    const trackerOn = !stmtOn && fromTracker.checked;
+    trackerField.hidden = stmtOn;
+    trackerHint.textContent = trackerOn
+      ? `Each month uses the tracker’s figure for the pay period starting that month; the amount below is used for any month it has no figure for. ${trackerStatusText()}`
+      : 'For Train fare/Parking: the figure the ticket tracker works out for each pay period.';
+    amountLabel.textContent = stmtOn ? 'Estimate (£)' : trackerOn ? 'Amount if the tracker has no figure (£)' : 'Amount (£)';
     amountHint.hidden = !stmtOn;
     nField.hidden = stmtOn || freq.value !== 'n';
     nDaysField.hidden = stmtOn || freq.value !== 'd';
@@ -1547,6 +1626,13 @@ function openRecurringEditor(itemId) {
     } else if (d.day >= 1 && d.day <= 31 && d.everyMonths >= 1 && d.everyMonths <= 12 && d.startDate) {
       const next = upcomingDates(d, todayIso(), 3, state.holidays);
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
+      if (d.amountFrom === TRACKER_SOURCE && next.length) {
+        const figs = next.map((iso) => {
+          const tp = trackerPeriodFor(state.tracker?.estimates, iso.slice(0, 7));
+          return `${periodLabel(iso.slice(0, 7))} ${tp ? formatPence(tp.totalPence) : Number.isInteger(d.amount) ? `${formatPence(d.amount)} (no tracker figure)` : 'no tracker figure'}`;
+        });
+        text += `\nAmounts: ${figs.join(' · ')}`;
+      }
       if (d.endDate && d.endDate >= d.startDate && d.firstNumber >= 1) {
         const numbering = itemNumbering(state.ledger, { ...d, id: existing?.id ?? '' });
         const periods = [...numbering.keys()];
@@ -1564,7 +1650,7 @@ function openRecurringEditor(itemId) {
     preview.hidden = !text;
   }
   for (const el of [freq, nMonths, nDays, day, start, end, shift, finalAmt, firstNo, amount]) el.addEventListener('input', sync);
-  for (const el of [freq, shift, account, toAccount, payStmt]) el.addEventListener('change', sync);
+  for (const el of [freq, shift, account, toAccount, payStmt, fromTracker]) el.addEventListener('change', sync);
 
   const form = h('form', {
     method: 'dialog', class: 'sheet-body',
@@ -1584,6 +1670,7 @@ function openRecurringEditor(itemId) {
       dlg.close();
       commit(next, existing ? 'Recurring item updated' : 'Recurring item added');
       if ($('recurringDialog').open) renderRecurringManager();
+      if ($('settingsDialog').open) renderSettings();
     },
   },
   h('header', { class: 'sheet-head' },
@@ -1594,6 +1681,7 @@ function openRecurringEditor(itemId) {
   seg,
   h('div', { class: 'field-pair' }, h('label', { class: 'field' }, accountLabel, account), toField),
   payStmtField,
+  trackerField,
   h('label', { class: 'field' }, amountLabel, amount, amountHint),
   freqDayPair,
   nField,
@@ -1613,6 +1701,7 @@ function openRecurringEditor(itemId) {
         dlg.close();
         commit(deleteRecurring(state.ledger, existing.id), 'Recurring item deleted');
         if ($('recurringDialog').open) renderRecurringManager();
+        if ($('settingsDialog').open) renderSettings();
       },
     }, 'Delete') : h('span'),
     h('button', { type: 'submit', class: 'btn-primary' }, existing ? 'Save' : 'Add')));
@@ -1799,6 +1888,15 @@ function renderSettings() {
     driveSection,
 
     backupsSection(st),
+
+    usesTracker(l) ? h('section', { class: 'settings-section', id: 'trackerSection' },
+      h('h3', {}, 'Ticket tracker'),
+      h('p', { class: 'small' }, (() => {
+        const items = recurringItems(l).filter((i) => i.amountFrom === TRACKER_SOURCE).map((i) => i.description);
+        return `${items.join(', ')} take${items.length === 1 ? 's' : ''} ${items.length === 1 ? 'its' : 'their'} amount from the ticket tracker.`;
+      })()),
+      h('p', { class: `small ${state.tracker?.error ? 'warn' : 'muted'}`, id: 'trackerStatusLine' }, trackerStatusText()),
+      st.enabled ? h('button', { type: 'button', class: 'btn-secondary', onclick: checkTrackerFromTap }, 'Check now') : null) : null,
 
     h('section', { class: 'settings-section' },
       h('h3', {}, st.enabled ? 'Backup file' : 'Move data between devices'),
@@ -2351,6 +2449,7 @@ async function boot() {
     }
     state.ledger = (await loadLedger()) ?? emptyLedger();
     state.meta = await loadMeta();
+    state.tracker = (await loadTrackerEstimates().catch(() => null)) ?? null;
   } catch (err) {
     app.replaceChildren(h('div', { class: 'card' }, h('h2', {}, 'Storage unavailable'), h('p', {}, `This browser blocked local storage (${err.message}). Private/incognito windows often do this.`)));
     return;

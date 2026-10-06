@@ -1,9 +1,9 @@
 {
   "name": "finance-tracker",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Personal finance tracking PWA - accounts, transactions, envelopes, trip mode, Drive sync",
   "type": "module",
   "scripts": {
-    "test": "node src/lib/__tests__/run-tests.mjs && node src/lib/__tests__/merge-tests.mjs && node src/lib/__tests__/app-tests.mjs && node src/lib/__tests__/sync-tests.mjs && node src/lib/__tests__/schedule-tests.mjs && node src/lib/__tests__/statement-tests.mjs && node src/lib/__tests__/reconcile-tests.mjs && node src/lib/__tests__/backup-tests.mjs && node src/lib/__tests__/vault-tests.mjs"
+    "test": "node src/lib/__tests__/run-tests.mjs && node src/lib/__tests__/merge-tests.mjs && node src/lib/__tests__/app-tests.mjs && node src/lib/__tests__/sync-tests.mjs && node src/lib/__tests__/schedule-tests.mjs && node src/lib/__tests__/statement-tests.mjs && node src/lib/__tests__/reconcile-tests.mjs && node src/lib/__tests__/backup-tests.mjs && node src/lib/__tests__/vault-tests.mjs && node src/lib/__tests__/tracker-tests.mjs"
   }
 }

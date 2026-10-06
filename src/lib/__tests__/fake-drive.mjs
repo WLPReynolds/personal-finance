@@ -35,6 +35,17 @@ export function createFakeDrive() {
       return null;
     },
     async download(token, id) { check(); return items.get(id).text; },
+    /** v0.11: by name anywhere (the ticket tracker's file), oldest first. */
+    async findFilesByName(token, name) {
+      check();
+      return [...items.values()].filter((f) => !f.folder && !f.trashed && f.name === name).map((f) => ({ id: f.id, version: String(f.version) }));
+    },
+    /** Test helper: a file another app (the ticket tracker) put in Drive. */
+    putForeignFile(name, text) {
+      const id = `file${nextId++}`;
+      items.set(id, { id, name, parent: 'tracker-folder', folder: false, text, version: 1, trashed: false });
+      return id;
+    },
     async createFile(token, folderId, name, text) {
       check();
       const id = `file${nextId++}`;
