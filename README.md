@@ -1,13 +1,61 @@
-# Finance Tracker 
+# Finance Tracker
 
 Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadsheets.
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.6.0 — Recurring items: last payment & numbering; phone list order
+## Status: v0.7.0 — Credit card statements and statement payments
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
-subscriptions, card payments) that appear ahead of time as projected entries.
+subscriptions, card payments) that appear ahead of time as projected entries,
+and (v0.7) **card statements**.
+
+**New in v0.7.0 — card statements**
+- **Card settings** (card → *Account…*): *Statement on working day no.* and
+  *Payment due, days after*. Barclaycard is **13** and **25**: the statement is
+  produced on the 13th working day (weekends and bank holidays skipped) and the
+  payment is due 25 days later, moved to the next working day. This matches
+  the real statements (17 Jun → 13 Jul, 17 Jul → 11 Aug, 19 Aug → 14 Sep,
+  17 Sep → 12 Oct). Leave the first box blank for no statements (Nationwide for
+  now).
+- **Statement rows** appear in the card's column on each statement date,
+  showing what's owed on that statement and when the payment is due.
+  Future ones say "estimate". Tap one (phone) or click it (grid) to open the
+  statement.
+- **What's owed is worked out from your entries**, never typed in. It is the
+  amount owed at the opening date, plus every entry on that statement or an
+  earlier one, less payments and refunds. If the real statement differs, an
+  entry is missing or on the wrong statement.
+- **Which statement an entry is on:** by default, the first statement on or
+  after its date, so a spend made on the statement day is on that statement.
+  When the bank puts it on the next one, there are two ways to move it:
+  - In the **statement** view, each entry within 3 days of the statement date
+    has a *This / Next* switch.
+  - In the **entry form**, the same choice appears whenever the date is within
+    3 days of a statement date. On the statement day itself it is flagged as
+    such.
+
+  Moved entries are tagged "⤵ on the 18 Nov statement". On the statement day,
+  the row order is: entries on the statement, then the statement row, then
+  entries carried to the next one.
+- **Paying the statement:** in a recurring *Transfer* to a card that has
+  statements, tick *Pay the statement balance on its due date*. The date then
+  comes from the statement and the amount is the statement balance. Repeat
+  rules, day and weekend rule don't apply. The payment in month M pays the
+  statement from month M−1. Each later statement counts the payments projected
+  before it.
+- **Paying less one month:** open that month's payment, change the amount,
+  then tap *Save for this month only*. Whatever isn't paid stays on the card
+  and shows up on the next statement and the next payment. *Confirm* records
+  the amount actually taken.
+- **The payment before your records start** (12 Oct pays the 17 Sep
+  statement) can't be worked out, so it uses the item's *Estimate*. Put the
+  real figure in as a one-off for that month.
+- **Card header (phone banner / grid header):** the next payment, and the
+  next statement's balance so far. Tap it to open that statement.
+- Turning *Pay the statement balance* on for an existing card-payment item
+  keeps its confirmed months, because months are keyed by the month the
+  payment is made.
 
 **New in v0.6.0**
 - **Phone list runs oldest → newest**, like the grid: Brought forward at the
@@ -122,6 +170,7 @@ just clears the old offline cache.
 - `src/models/schema.js` — data model (schema v2: integer pence, derived balances)
 - `src/lib/ops.js` — pure ledger operations (accounts, transactions, transfers, balances)
 - `src/lib/schedule.js` — recurring items: dates, projections, confirm/skip/one-off, series edits
+- `src/lib/statements.js` — card statements: dates, due dates, which statement an entry is on, amount owed, statement rows (v0.7)
 - `src/lib/workdays.js` — weekends, bank holidays (gov.uk + built-in), working-day shifts, nth working day
 - `src/lib/grid.js` — builds the desktop grid rows
 - `src/lib/money.js` — pence ⇄ "£1,234.56"
@@ -145,7 +194,7 @@ just clears the old offline cache.
 
 1. Excel import (SheetJS) — historical data; October 2026 onwards is being kept as entered
 2. Envelopes UI (Monzo: Transport/Health/Maintenance)
-3. Reconcile mode, statement-date calculation (`nthWorkingDay` is ready — Barclaycard = 13th) + boundary prompt; card payment = statement balance
+3. Reconcile mode (tick-off against a statement); a statement date that doesn't follow the card's rule one month (no override yet); Nationwide's statement rule
 4. Trip Mode, fuzzy search + archive, Export-to-Sheets
 5. Joint/shared ledger with Alison (sync engine is ready; `drive.file` means she opens the shared file once via Google's file picker)
 7. Draggable grid columns, iOS install hint
@@ -156,5 +205,5 @@ just clears the old offline cache.
 npm test
 ```
 
-105 tests (incl. two-device sync + stress test, recurring items), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py` (and the others in `dev/e2e/`).
+132 tests (incl. two-device sync + stress test, recurring items, card statements), plain Node `assert`, no install needed.
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py` (and the others in `dev/e2e/`).

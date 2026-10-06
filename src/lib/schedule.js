@@ -23,6 +23,7 @@
  */
 import { randomUUID } from './id.js';
 import { daysInMonth, shiftToWorkingDay } from './workdays.js';
+import { statementConfig, paymentDueDate, statementFor, addMonths as addStatementMonths } from './statements.js';
 
 export const MAX_HORIZON_MONTHS = 12;
 
@@ -43,6 +44,10 @@ export const MAX_HORIZON_MONTHS = 12;
  * @property {number|null} [finalAmount] - pence; the last payment's amount if it differs (needs an end date). null/absent = same as the rest
  * @property {number} [firstNumber]      - fixed-end series only: the number of this series' first payment, for "(x of y)". Default 1;
  *                                         e.g. 2 when payment 1 was made before the series was set up
+ * @property {boolean} [payStatement]   - v0.7, transfer to a credit card only: pay the card's statement balance on its
+ *                                         payment due date (statements.js). day/shift/everyMonths are then ignored, and
+ *                                         `amount` is only an estimate for a statement from before the card's records start.
+ *                                         The payment for month P pays the statement produced the month before.
  * @property {string} createdAt
  */
 
@@ -97,6 +102,29 @@ export function horizonEnd(todayIso, months) {
 
 // ------------------------------------------------------------------ dates
 
+/** The card a statement-payment item pays, if it's set up for statements — else null (the item then behaves as a plain monthly one). */
+export function statementCardFor(item, accounts) {
+  if (!item.payStatement || item.kind !== 'transfer') return null;
+  const card = accounts?.find((a) => a.id === item.toAccountId);
+  return statementConfig(card) ? card : null;
+}
+
+/**
+ * The date an item falls due in a month (after the weekend rule), or null.
+ * For a statement payment: the due date of the previous month's statement.
+ */
+function occurrenceDate(item, period, holidays, card) {
+  if (card) {
+    if (monthsBetween(periodOf(item.startDate), period) < 0) return null;
+    const date = paymentDueDate(card, addMonths(period, -1), holidays);
+    if (!date || date < item.startDate) return null;
+    if (item.endDate && date > item.endDate) return null;
+    return { nominal: date, date };
+  }
+  const nominal = nominalDate(item, period);
+  return nominal ? { nominal, date: shiftToWorkingDay(nominal, item.shift, holidays) } : null;
+}
+
 /** The series' own date in a month (before any weekend shift), or null if not due that month. */
 export function nominalDate(item, period) {
   const offset = monthsBetween(periodOf(item.startDate), period);
@@ -113,32 +141,29 @@ export function nominalDate(item, period) {
  * on or before `toIso`, from its start.
  * @returns {{ period: string, nominal: string, date: string }[]}
  */
-export function seriesDates(item, toIso, holidays) {
+export function seriesDates(item, toIso, holidays, card = null) {
   const out = [];
   const last = addMonths(periodOf(toIso), 1); // a 'before' shift can pull next month's 1st back into range
   for (let p = periodOf(item.startDate); monthsBetween(p, last) >= 0; p = addMonths(p, 1)) {
-    const nominal = nominalDate(item, p);
-    if (!nominal) continue;
-    const date = shiftToWorkingDay(nominal, item.shift, holidays);
-    if (date <= toIso) out.push({ period: p, nominal, date });
+    const o = occurrenceDate(item, p, holidays, card);
+    if (o && o.date <= toIso) out.push({ period: p, ...o });
   }
   return out;
 }
 
 /** The next few dates from a given day — for the preview line in the editor and the manager list. */
-export function upcomingDates(item, fromIso, count, holidays) {
+export function upcomingDates(item, fromIso, count, holidays, card = null) {
   const out = [];
   if (item.endDate && item.endDate < fromIso) return out;
   let p = periodOf(item.startDate > fromIso ? item.startDate : fromIso);
   p = addMonths(p, -1);
   for (let guard = 0; out.length < count && guard < 600; guard++, p = addMonths(p, 1)) {
-    const nominal = nominalDate(item, p);
-    if (!nominal) {
+    const o = occurrenceDate(item, p, holidays, card);
+    if (!o) {
       if (item.endDate && `${p}-01` > item.endDate) break;
       continue;
     }
-    const date = shiftToWorkingDay(nominal, item.shift, holidays);
-    if (date >= fromIso) out.push(date);
+    if (o.date >= fromIso) out.push(o.date);
   }
   return out;
 }
@@ -147,7 +172,7 @@ export function upcomingDates(item, fromIso, count, holidays) {
 
 /** Every period the series falls due in, start to end. Only for a series with an end date. */
 function allPeriods(item) {
-  if (!item.endDate) return [];
+  if (!item.endDate || item.payStatement) return []; // statement payments aren't numbered
   const out = [];
   const last = periodOf(item.endDate);
   for (let p = periodOf(item.startDate); monthsBetween(p, last) >= 0; p = addMonths(p, 1)) {
@@ -198,7 +223,7 @@ export function itemNumbering(ledger, item) {
 
 /** The series' own amount for a month: finalAmount on the final payment, otherwise the usual amount. */
 export function seriesAmount(item, period, numbering) {
-  if (item.finalAmount == null || !item.endDate) return item.amount;
+  if (item.finalAmount == null || !item.endDate || item.payStatement) return item.amount;
   return finalPeriodOf(numbering) === period ? item.finalAmount : item.amount;
 }
 
@@ -220,29 +245,60 @@ export function projections(ledger, toIso, holidays) {
   const confirmed = confirmedKeys(ledger);
   const exceptions = new Map(occurrenceExceptions(ledger).map((e) => [e.id, e]));
   const out = [];
+  const projectionFor = (item, period, date, amount, numbering, extra = {}) => {
+    const ex = exceptions.get(exceptionId(item.id, period));
+    const effectiveDate = ex?.date ?? date;
+    if (effectiveDate > toIso) return null; // a one-off moved beyond the horizon
+    return {
+      key: `${item.id}:${period}`,
+      itemId: item.id,
+      period,
+      date: effectiveDate,
+      seriesDate: date,
+      amount: ex?.amount ?? amount,
+      seriesAmount: amount,
+      number: numbering?.get(period) ?? null, // { n, of } for a fixed-end series; null if skipped / open-ended
+      description: ex?.description ?? item.description,
+      kind: item.kind,
+      accountId: item.accountId,
+      toAccountId: item.kind === 'transfer' ? item.toAccountId : null,
+      skipped: Boolean(ex?.skipped),
+      changed: Boolean(ex && (ex.date !== null || ex.amount !== null || ex.description !== null)),
+      ...extra,
+    };
+  };
+
+  // 1. ordinary items
+  const statementItems = [];
   for (const item of recurringItems(ledger)) {
+    const card = statementCardFor(item, ledger.accounts);
+    if (card) { statementItems.push({ item, card }); continue; }
     const numbering = seriesNumbering(item, skippedPeriodsFor(ledger, item.id, confirmed));
     for (const { period, date } of seriesDates(item, toIso, holidays)) {
       if (confirmed.has(`${item.id}|${period}`)) continue;
-      const ex = exceptions.get(exceptionId(item.id, period));
-      const effectiveDate = ex?.date ?? date;
-      if (effectiveDate > toIso) continue; // a one-off moved beyond the horizon
-      out.push({
-        key: `${item.id}:${period}`,
-        itemId: item.id,
-        period,
-        date: effectiveDate,
-        seriesDate: date,
-        amount: ex?.amount ?? seriesAmount(item, period, numbering),
-        seriesAmount: seriesAmount(item, period, numbering),
-        number: numbering.get(period) ?? null, // { n, of } for a fixed-end series; null if skipped / open-ended
-        description: ex?.description ?? item.description,
-        kind: item.kind,
-        accountId: item.accountId,
-        toAccountId: item.kind === 'transfer' ? item.toAccountId : null,
-        skipped: Boolean(ex?.skipped),
-        changed: Boolean(ex && (ex.date !== null || ex.amount !== null || ex.description !== null)),
-      });
+      const p = projectionFor(item, period, date, seriesAmount(item, period, numbering), numbering);
+      if (p) out.push(p);
+    }
+  }
+
+  // 2. statement payments, oldest first: each statement's balance counts
+  // everything projected before it, including earlier statement payments
+  // (and anything paid less, or skipped, carries on to the next statement)
+  if (statementItems.length) {
+    const projected = [...out];
+    const balanceLedger = () => ({ ...ledger, transactions: [...ledger.transactions, ...projected.flatMap(projectionLegs)] });
+    const pending = statementItems.flatMap(({ item, card }) =>
+      seriesDates(item, toIso, holidays, card).map((o) => ({ item, card, ...o })));
+    pending.sort((a, b) => a.date.localeCompare(b.date));
+    for (const { item, card, period, date } of pending) {
+      if (confirmed.has(`${item.id}|${period}`)) continue;
+      const st = statementFor(balanceLedger(), card, addStatementMonths(period, -1), holidays);
+      const amount = st.beforeRecords ? item.amount : Math.max(0, st.owed);
+      const p = projectionFor(item, period, date, amount, null, { statement: st });
+      if (!p) continue;
+      if (p.amount <= 0 && !p.skipped) continue; // nothing owed: no payment
+      out.push(p);
+      projected.push(p);
     }
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
@@ -304,13 +360,19 @@ const isIso = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v ?? '');
 
 function validateItem(f, ledger) {
   if (!f.description?.trim()) throw new Error('Give it a description');
+  if (f.payStatement) {
+    if (f.kind !== 'transfer') throw new Error('Only a transfer to a credit card can pay its statement');
+    const card = ledger.accounts.find((a) => a.id === f.toAccountId);
+    if (!statementConfig(card)) throw new Error('Set the card’s statement date first (Account…)');
+    if (!Number.isInteger(f.amount) || f.amount < 0) throw new Error('Estimate must be £0.00 or more');
+  }
   if (!['out', 'in', 'transfer'].includes(f.kind)) throw new Error('Choose money out, money in or transfer');
   if (!ledger.accounts.some((a) => a.id === f.accountId)) throw new Error('Choose an account');
   if (f.kind === 'transfer') {
     if (!ledger.accounts.some((a) => a.id === f.toAccountId)) throw new Error('Choose the account the money goes to');
     if (f.toAccountId === f.accountId) throw new Error('A transfer needs two different accounts');
   }
-  if (!Number.isInteger(f.amount) || f.amount <= 0) throw new Error('Amount must be more than £0.00');
+  if (!f.payStatement && (!Number.isInteger(f.amount) || f.amount <= 0)) throw new Error('Amount must be more than £0.00');
   if (!Number.isInteger(f.everyMonths) || f.everyMonths < 1 || f.everyMonths > 12) throw new Error('Repeat every 1 to 12 months');
   if (!Number.isInteger(f.day) || f.day < 1 || f.day > 31) throw new Error('Day of the month must be 1 to 31');
   if (!isIso(f.startDate)) throw new Error('A start date is required');
@@ -336,8 +398,9 @@ function cleanItemFields(f) {
     startDate: f.startDate,
     endDate: f.endDate || null,
     shift: f.shift ?? 'none',
-    finalAmount: f.finalAmount ?? null,
+    finalAmount: f.payStatement ? null : f.finalAmount ?? null,
     firstNumber: f.firstNumber ?? 1,
+    payStatement: Boolean(f.kind === 'transfer' && f.payStatement),
   };
 }
 
@@ -421,7 +484,11 @@ export function confirmOccurrence(ledger, itemId, period, { date, amount, descri
 }
 
 /** Plain-English rule, e.g. "Monthly on the 28th · working day before". */
-export function describeRule(item) {
+export function describeRule(item, card = null) {
+  if (item.payStatement) {
+    const days = card?.creditCard?.paymentDaysAfter ?? 25;
+    return `Statement balance · ${days} days after the statement · next working day`;
+  }
   const nth = (n) => `${n}${n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th'}`;
   const month = new Date(Date.UTC(2000, Number(item.startDate.slice(5, 7)) - 1, 1)).toLocaleDateString('en-GB', { month: 'long', timeZone: 'UTC' });
   const freq =

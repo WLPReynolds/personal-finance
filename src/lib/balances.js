@@ -29,6 +29,11 @@ export function sortForBalance(transactions) {
       const dateCompare = a.tx.date.localeCompare(b.tx.date);
       if (dateCompare !== 0) return dateCompare;
 
+      // statement days (statements.js): entries on the statement, then the
+      // statement row, then entries carried to the next statement
+      const stmtCompare = (a.tx.stmtOrder ?? 0) - (b.tx.stmtOrder ?? 0);
+      if (stmtCompare !== 0) return stmtCompare;
+
       const dirRank = (direction) => (direction === 'credit' ? 0 : 1);
       const dirCompare = dirRank(a.tx.direction) - dirRank(b.tx.direction);
       if (dirCompare !== 0) return dirCompare;

@@ -35,6 +35,9 @@ export function buildGridRows(ledger, accounts) {
         balances: {},
         _index: index,
         _rank: t.direction === 'credit' ? 0 : 1,
+        _stmt: 0,
+        statement: t.isStatement ? t.statement : null, // derived statement row (statements.js)
+        stmtTag: null,
       };
       rowsByKey.set(key, row);
       order.push(row);
@@ -48,10 +51,12 @@ export function buildGridRows(ledger, accounts) {
     };
     // a transfer row with a credit leg sorts with the credits, same rule as sortForBalance
     if (t.direction === 'credit') row._rank = 0;
+    row._stmt = Math.max(row._stmt, t.stmtOrder ?? 0);
+    if (t.stmtTag) row.stmtTag = { tag: t.stmtTag, month: t.stmtMonth };
   });
 
-  // Same ordering rule as balances.js: date, credits first, then insertion.
-  order.sort((a, b) => a.date.localeCompare(b.date) || a._rank - b._rank || a._index - b._index);
+  // Same ordering rule as balances.js: date, statement order, credits first, then insertion.
+  order.sort((a, b) => a.date.localeCompare(b.date) || a._stmt - b._stmt || a._rank - b._rank || a._index - b._index);
 
   const running = Object.fromEntries(accounts.map((a) => [a.id, signedOpening(a)]));
   for (const row of order) {
@@ -62,6 +67,7 @@ export function buildGridRows(ledger, accounts) {
     }
     delete row._index;
     delete row._rank;
+    delete row._stmt;
   }
   return order;
 }

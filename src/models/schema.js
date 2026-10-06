@@ -36,7 +36,8 @@
  * @typedef {Object} CreditCardDetails
  * @property {number|null} statementWorkingDay   - e.g. 13 means "13th working day of the month"
  * @property {string|null} nextStatementDateOverride - ISO date; manual correction once the real statement lands
- * @property {number} statementBalance      - pence, balance as of the last confirmed statement
+ * @property {number} statementBalance      - pence, balance as of the last confirmed statement (unused — statements are derived, see statements.js)
+ * @property {number|null} [paymentDaysAfter] - v0.7: payment due this many days after the statement (next working day); null = 25
  */
 
 /**
@@ -69,6 +70,8 @@
  * @property {string|null} scheduledItemId - set when this is a confirmed entry of a recurring item
  * @property {string} [scheduledPeriod]    - YYYY-MM of the recurring item's month it confirms (only with scheduledItemId)
  * @property {boolean} isProjected         - always false when stored; true only on derived projected rows (never saved)
+ * @property {string|null} [statementMonth] - v0.7, card entries only: YYYY-MM of the statement it's really on, when that
+ *                                            differs from its date (see statements.js). null/absent = by date
  */
 
 /**

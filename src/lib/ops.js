@@ -51,7 +51,7 @@ export function addAccount(ledger, fields) {
     sharedFileId: null,
     creditCard:
       fields.type === 'credit'
-        ? { statementWorkingDay: null, nextStatementDateOverride: null, statementBalance: 0 }
+        ? cleanCreditCard({ statementWorkingDay: null, nextStatementDateOverride: null, statementBalance: 0, paymentDaysAfter: null, ...(fields.creditCard ?? {}) })
         : null,
     envelopes: null,
     createdAt: new Date().toISOString(),
@@ -59,13 +59,26 @@ export function addAccount(ledger, fields) {
   return { ledger: touch({ ...ledger, accounts: [...ledger.accounts, account] }), account };
 }
 
+/**
+ * Statement settings (v0.7): statementWorkingDay 1-20 or null (= no
+ * statements), paymentDaysAfter 1-60 or null (= the usual 25).
+ */
+function cleanCreditCard(cc) {
+  const wd = cc.statementWorkingDay;
+  if (wd !== null && (!Number.isInteger(wd) || wd < 1 || wd > 20)) throw new Error('Statement working day must be 1 to 20, or blank');
+  const days = cc.paymentDaysAfter ?? null;
+  if (days !== null && (!Number.isInteger(days) || days < 1 || days > 60)) throw new Error('Payment due must be 1 to 60 days after the statement');
+  return { ...cc, paymentDaysAfter: days };
+}
+
 export function updateAccount(ledger, id, fields) {
   const accounts = ledger.accounts.map((a) => {
     if (a.id !== id) return a;
     const next = { ...a, ...fields };
     if (next.type === 'credit' && !next.creditCard) {
-      next.creditCard = { statementWorkingDay: null, nextStatementDateOverride: null, statementBalance: 0 };
+      next.creditCard = { statementWorkingDay: null, nextStatementDateOverride: null, statementBalance: 0, paymentDaysAfter: null };
     }
+    if (next.creditCard) next.creditCard = cleanCreditCard(next.creditCard);
     return next;
   });
   return touch({ ...ledger, accounts });
@@ -104,11 +117,13 @@ function blankTx(fields) {
     envelopeSplits: null,
     scheduledItemId: null,
     isProjected: false,
+    statementMonth: fields.statementMonth ?? null,
   };
 }
 
 function validate(fields) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.date ?? '')) throw new Error('A valid date is required');
+  if (fields.statementMonth != null && !/^\d{4}-\d{2}$/.test(fields.statementMonth)) throw new Error('Not a valid statement month');
   if (fields.kind === 'note') {
     if (!fields.description?.trim()) throw new Error('A note needs some text');
     return;
@@ -141,6 +156,7 @@ export function addTransaction(ledger, fields) {
     });
     // keep the leg for the account the user is looking at first, so it sorts naturally
     const ordered = transactions[0].accountId === fields.accountId ? transactions : [transactions[1], transactions[0]];
+    if (fields.statementMonth) ordered[0] = { ...ordered[0], statementMonth: fields.statementMonth };
     return touch({
       ...ledger,
       transactions: [...ledger.transactions, ...ordered],
@@ -204,6 +220,17 @@ export function deleteTransaction(ledger, id) {
     });
   }
   return touch({ ...ledger, transactions: ledger.transactions.filter((t) => t.id !== id) });
+}
+
+/**
+ * Say which card statement an entry is on (statements.js). Pass null for
+ * "whichever its date says". Only this entry changes — not a transfer's
+ * other leg, which is on a different account.
+ */
+export function setStatementMonth(ledger, id, month) {
+  if (month !== null && !/^\d{4}-\d{2}$/.test(month)) throw new Error('Not a valid statement month');
+  if (!ledger.transactions.some((t) => t.id === id)) throw new Error('Transaction not found');
+  return touch({ ...ledger, transactions: ledger.transactions.map((t) => (t.id === id ? { ...t, statementMonth: month } : t)) });
 }
 
 /** The other leg of a transfer, or null. */

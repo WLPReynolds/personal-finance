@@ -10,7 +10,7 @@ import { googleDrive } from './drive.js';
 import { createSyncEngine } from './lib/sync-engine.js';
 import {
   emptyLedger, addAccount, updateAccount, deleteAccount, moveAccount,
-  addTransaction, updateTransaction, deleteTransaction,
+  addTransaction, updateTransaction, deleteTransaction, setStatementMonth,
   accountRunning, balanceAsOf, counterpartOf,
 } from './lib/ops.js';
 import { buildGridRows } from './lib/grid.js';
@@ -23,10 +23,14 @@ import {
 import {
   MAX_HORIZON_MONTHS, horizonEnd, withProjections, recurringItems,
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
-  upcomingDates, describeRule, itemNumbering, seriesAmount, numberLabel,
+  upcomingDates, describeRule, itemNumbering, seriesAmount, numberLabel, statementCardFor,
 } from './lib/schedule.js';
+import {
+  DEFAULT_PAYMENT_DAYS, statementConfig, statementDate, paymentDueDate, statementFor, statementMonthByDate,
+  boundaryChoice, withStatements, addMonths, monthOf,
+} from './lib/statements.js';
 
-export const APP_VERSION = '0.6.0';
+export const APP_VERSION = '0.7.0';
 
 const state = {
   ledger: null,
@@ -120,7 +124,7 @@ function openDialog(dlg) {
   const i = dialogStack.indexOf(dlg);
   if (i !== -1) dialogStack.splice(i, 1); // re-showing the same dialog shouldn't duplicate it
   dialogStack.push(dlg);
-  dlg.showModal();
+  if (!dlg.open) dlg.showModal(); // already open = new content in the same dialog (e.g. statement -> payment)
 }
 for (const d of document.querySelectorAll('dialog')) {
   d.addEventListener('close', () => {
@@ -180,7 +184,8 @@ function projectionEnd() {
 }
 /** The ledger plus projected entries from recurring items — for display only, never saved. */
 function viewLedger() {
-  return withProjections(state.ledger, projectionEnd(), state.holidays);
+  const end = projectionEnd();
+  return withStatements(withProjections(state.ledger, end, state.holidays), end, state.holidays);
 }
 function hasRecurring() {
   return recurringItems(state.ledger).length > 0;
@@ -230,6 +235,38 @@ function projectionTags(p, today) {
   if (p.skipped) return { cls: 'skipped', label: 'skipped' };
   if (p.date <= today) return { cls: 'overdue', label: p.date === today ? 'due today · tap to confirm' : 'not confirmed yet' };
   return { cls: '', label: p.changed ? 'projected · changed for this month' : 'projected' };
+}
+
+// ------------------------------------------------------------------ card statements
+
+function stmtLabel(month, account) {
+  const d = statementDate(account, month, state.holidays);
+  return d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : periodLabel(month);
+}
+/** "on the 18 Nov statement" tag for an entry whose statement isn't the one its date says. */
+function stmtTagText(tag, month, account) {
+  return `${tag === 'next' ? '⤵' : '⤴'} on the ${stmtLabel(month, account)} statement`;
+}
+/** The statement-payment recurring item for a card, if any. */
+function statementItemFor(card) {
+  return recurringItems(state.ledger).find((i) => statementCardFor(i, state.ledger.accounts)?.id === card.id) ?? null;
+}
+/** The next statement (on or after today) and the next payment not yet confirmed, for a card's header. */
+function cardOutlook(card, view, today) {
+  if (!statementConfig(card)) return null;
+  let m = monthOf(today);
+  if (statementDate(card, m, state.holidays) < today) m = addMonths(m, 1);
+  const st = statementFor(view, card, m, state.holidays);
+  const pay = view.transactions.find((t) => t.isProjected && t.accountId === card.id && t.projection?.statement && !t.skipped);
+  return { st, pay };
+}
+function outlookText(card, o, short = false) {
+  if (!o) return '';
+  const parts = [];
+  const day = (iso) => (short ? shortDate(iso) : new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }));
+  if (o.pay) parts.push(`${short ? 'Pay' : 'Next payment'} ${formatPence(o.pay.amount)} ${o.pay.date < todayIso() ? 'was due' : 'on'} ${day(o.pay.date)}`);
+  if (o.st?.owed != null) parts.push(`${short ? 'Stmt' : 'Statement'} ${day(o.st.date)}: ${formatPence(o.st.owed)} so far`);
+  return parts.join(' · ');
 }
 
 function holidayStatusText() {
@@ -526,6 +563,11 @@ function renderList(accounts) {
     h('div', { class: 'banner-label' }, active.type === 'credit' ? 'Owed today' : 'Balance today'),
     h('div', { class: `banner-amount ${bal < 0 ? 'neg' : ''}` }, formatPence(bal)),
     h('div', { class: 'banner-eom' }, `${active.type === 'credit' ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${monthYearLabel(eomIso)}`),
+    (() => {
+      const o = cardOutlook(active, view, todayIsoStr);
+      if (!o) return null;
+      return h('button', { type: 'button', class: 'banner-stmt', onclick: () => openStatementDialog(active.id, o.st.month) }, outlookText(active, o), ' ›');
+    })(),
     h('button', { type: 'button', class: 'banner-edit', onclick: () => openAccountDialog(active.id) }, 'Account…'));
 
   // Oldest first, same order as the grid: future entries at the bottom.
@@ -542,6 +584,20 @@ function renderList(accounts) {
       lastDate = t.date;
       feed.append(h('li', { class: `day ${t.date > today ? 'future' : ''}`, dataset: { date: t.date } }, longDate(t.date), t.date > today ? ' · upcoming' : ''));
     }
+    if (t.isStatement) {
+      const st = t.statement;
+      feed.append(h('li', {}, h('button', {
+        type: 'button', class: `entry entry-stmt ${st.date > today ? 'future' : ''}`,
+        onclick: () => openStatementDialog(active.id, st.month),
+      },
+        h('span', { class: 'entry-main' },
+          h('span', { class: 'entry-desc' }, h('span', { class: 'desc-text' }, st.date > today ? 'Statement (estimate)' : 'Statement')),
+          h('span', { class: 'entry-link' }, `Payment due ${longDate(st.dueDate)}`)),
+        h('span', { class: 'entry-amts' },
+          h('span', { class: 'entry-amt' }, formatPence(st.owed)),
+          h('span', { class: 'entry-bal muted' }, 'owed')))));
+      continue;
+    }
     const other = counterpartOf(view, t);
     const otherAcc = other ? accountById(other.accountId) : null;
     const p = t.isProjected ? t.projection : null;
@@ -556,10 +612,11 @@ function renderList(accounts) {
           h('span', { class: 'entry-desc' }, p ? h('span', { class: 'rec-icon', 'aria-label': 'Recurring' }, '↻ ') : null,
             h('span', { class: 'desc-text' }, t.description || '(no description)'),
             t.seriesNo ? h('span', { class: 'series-no' }, numberLabel(t.seriesNo)) : null),
-          otherAcc || tags ? h('span', { class: 'entry-link' },
+          otherAcc || tags || t.stmtTag ? h('span', { class: 'entry-link' },
             otherAcc ? `${t.direction === 'debit' ? '→' : '←'} ${otherAcc.name}` : '',
             otherAcc && tags ? ' · ' : '',
-            tags ? h('span', { class: 'rec-tag' }, tags.label) : null) : null),
+            tags ? h('span', { class: 'rec-tag' }, tags.label) : null,
+            t.stmtTag ? h('span', { class: 'stmt-tag' }, (otherAcc || tags ? ' · ' : '') + stmtTagText(t.stmtTag, t.stmtMonth, active)) : null) : null),
         t.kind === 'note'
           ? h('span', { class: 'entry-amt muted' }, 'note')
           : h('span', { class: 'entry-amts' },
@@ -627,7 +684,11 @@ function renderGrid(accounts) {
           h('button', { type: 'button', class: 'btn-link acc-name', title: 'Edit account', onclick: () => openAccountDialog(a.id) }, a.name),
           h('button', { type: 'button', class: 'acc-add', title: `Add entry to ${a.name}`, onclick: () => openTxDialog({ accountId: a.id }) }, '+')),
         h('div', { class: `acc-total ${todayBal < 0 ? 'neg' : ''}` }, `${a.type === 'credit' ? 'Owed ' : ''}${formatPence(todayBal)}`),
-        h('div', { class: 'acc-eom', dataset: { eomFor: a.id } }));
+        h('div', { class: 'acc-eom', dataset: { eomFor: a.id } }),
+        (() => {
+          const o = cardOutlook(a, view, today);
+          return o ? h('button', { type: 'button', class: 'btn-link acc-stmt', title: outlookText(a, o), onclick: () => openStatementDialog(a.id, o.st.month) }, outlookText(a, o, true)) : null;
+        })());
     }));
   const head2 = h('tr', {}, accounts.map(() => [h('th', { class: 'num sub' }, 'Credit'), h('th', { class: 'num sub' }, 'Debit'), h('th', { class: 'num sub bal-col' }, 'Balance')]));
 
@@ -640,6 +701,24 @@ function renderGrid(accounts) {
 
   for (const row of rows) {
     const future = row.date > today;
+    if (row.statement) {
+      const st = row.statement;
+      const cardId = Object.keys(row.cells)[0];
+      const card = accountById(cardId);
+      const openStmt = () => openStatementDialog(cardId, st.month);
+      const tr = h('tr', { class: `row-stmt ${future ? 'future' : ''} ${row.date === today ? 'is-today' : ''}`, dataset: { date: row.date } },
+        h('td', { class: 'sticky-l c-date clickable', onclick: openStmt }, shortDate(row.date)),
+        h('td', { class: 'sticky-l2 c-desc clickable', onclick: openStmt, title: `${card.name} statement — payment due ${longDate(st.dueDate)}` },
+          `▤ ${card.name} statement${future ? ' (estimate)' : ''}`));
+      for (const a of accounts) {
+        const bal = row.balances[a.id];
+        if (a.id === cardId) tr.append(h('td', { class: 'num clickable stmt-cell', colspan: '2', onclick: openStmt }, `${formatPence(st.owed, { symbol: false })} owed`));
+        else tr.append(h('td', {}), h('td', {}));
+        tr.append(h('td', { class: `num bal-col bal-carried ${bal < 0 ? 'neg' : ''}` }, formatPence(bal, { symbol: false })));
+      }
+      body.append(tr);
+      continue;
+    }
     const p = row.projection;
     const tags = p ? projectionTags(p, today) : null;
     const openRow = () => (p ? openOccurrenceDialog(p.itemId, p.period) : openTxDialog({ txId: row.txIds[0] }));
@@ -651,7 +730,8 @@ function renderGrid(accounts) {
       h('td', { class: 'sticky-l2 c-desc clickable', title: `${row.description}${row.seriesNo ? ` ${numberLabel(row.seriesNo)}` : ''}${p ? ` — ${tags.label}` : ''}`, onclick: openRow },
         p ? h('span', { class: 'rec-icon', title: `Recurring — ${tags.label}` }, '↻ ') : null,
         row.isTransfer ? h('span', { class: 'link-icon', title: 'Linked transfer' }, '⇄ ') : null, row.description,
-        row.seriesNo ? h('span', { class: 'series-no' }, ` ${numberLabel(row.seriesNo)}`) : null));
+        row.seriesNo ? h('span', { class: 'series-no' }, ` ${numberLabel(row.seriesNo)}`) : null,
+        row.stmtTag ? h('span', { class: 'stmt-tag' }, ` ${stmtTagText(row.stmtTag.tag, row.stmtTag.month, accountById(Object.keys(row.cells).find((id) => statementConfig(accountById(id)))) ?? accounts[0])}`) : null));
     for (const a of accounts) {
       const cell = row.cells[a.id];
       const open = (direction) => () =>
@@ -672,7 +752,7 @@ function renderGrid(accounts) {
   const wrap = h('div', { class: 'grid-wrap' }, table);
   app.replaceChildren(
     h('div', { class: 'grid-view' },
-      h('p', { class: 'grid-hint muted small' }, 'Click an empty Credit/Debit cell to add to that account on that date · click a value or description to edit · ⇄ = linked transfer · ↻ = recurring, click to confirm'),
+      h('p', { class: 'grid-hint muted small' }, 'Click an empty Credit/Debit cell to add to that account on that date · click a value or description to edit · ⇄ = linked transfer · ↻ = recurring, click to confirm · ▤ = card statement, click to check it'),
       wrap));
 
   // The "month in view" line tracks whichever row sits just below the
@@ -764,11 +844,40 @@ function openTxDialog(opts) {
     ? (counterpart ? h('div', { class: 'linked' }, '⇄ Linked: changes also update ', h('strong', {}, accountById(counterpart.accountId)?.name ?? 'other account'), ` (${counterpart.direction}). Delete removes both.`) : null)
     : h('label', { class: 'field' }, h('span', {}, 'Also record in another account?'), counterpartSelect, counterpartHint);
 
+  // Which card statement it's on — offered only near a statement date (statements.js)
+  const hasStatements = Boolean(statementConfig(account));
+  let stmtChoice = existing?.statementMonth ?? null; // null = whichever its date says
+  let stmtShown = null; // the boundaryChoice currently offered
+  const stmtSeg = h('div', { class: 'seg', role: 'radiogroup' });
+  const stmtHint = h('div', { class: 'muted small' });
+  const stmtField = h('div', { class: 'field stmt-choice', hidden: true }, h('span', {}, 'Which statement is it on?'), stmtSeg, stmtHint);
+  function syncStatement() {
+    stmtShown = hasStatements && kind !== 'note' ? boundaryChoice(account, date.value, state.holidays) : null;
+    stmtField.hidden = !stmtShown;
+    if (!stmtShown) return;
+    const chosen = stmtShown.options.includes(stmtChoice) ? stmtChoice : stmtShown.byDate;
+    stmtSeg.replaceChildren(...stmtShown.options.map((m, i) => h('button', {
+      type: 'button', role: 'radio', class: 'seg-btn', 'aria-checked': String(m === chosen),
+      onclick: () => { stmtChoice = m; syncStatement(); },
+    }, `${i === 0 ? 'This' : 'Next'} · ${stmtLabel(m, account)}`)));
+    const onDay = date.value === statementDate(account, stmtShown.near, state.holidays);
+    stmtHint.textContent = onDay
+      ? 'Statement day — something bought today sometimes only shows on the next statement. Change it later if the real statement disagrees.'
+      : `Close to the ${stmtLabel(stmtShown.near, account)} statement — check which one it really appears on.`;
+  }
+  /** statementMonth to save: null = by date. Kept as is if the date didn't change and no choice is offered. */
+  function statementMonthToSave() {
+    if (!stmtShown) return existing && date.value === existing.date ? existing.statementMonth ?? null : null;
+    const chosen = stmtShown.options.includes(stmtChoice) ? stmtChoice : stmtShown.byDate;
+    return chosen === statementMonthByDate(account, date.value, state.holidays) ? null : chosen;
+  }
+
   function syncKind() {
     for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === kind));
     amountField.hidden = kind === 'note';
     if (counterpartField && !existing) counterpartField.hidden = kind === 'note';
     updateCounterpartHint();
+    syncStatement();
   }
   function updateCounterpartHint() {
     const other = accountById(counterpartSelect.value);
@@ -782,6 +891,8 @@ function openTxDialog(opts) {
   }
   counterpartSelect.addEventListener('change', updateCounterpartHint);
   date.addEventListener('input', checkDate);
+  date.addEventListener('input', syncStatement);
+  date.addEventListener('change', syncStatement);
 
   // Pick a previous description -> prefill amount/direction/transfer if still blank (new entries only)
   desc.addEventListener('change', () => {
@@ -809,6 +920,7 @@ function openTxDialog(opts) {
         direction: kind === 'note' ? (existing?.direction ?? 'debit') : kind,
         amount: kind === 'note' ? 0 : parseAmount(amount.value),
       };
+      if (hasStatements) fields.statementMonth = kind === 'note' ? null : statementMonthToSave();
       if (kind !== 'note' && fields.amount === null) return toast('Enter an amount like 12.34', 'error');
       let next;
       if (existing) {
@@ -830,6 +942,7 @@ function openTxDialog(opts) {
   amountField,
   h('label', { class: 'field' }, h('span', {}, 'Description'), desc, datalist),
   h('label', { class: 'field' }, h('span', {}, 'Date'), date, dateWarn),
+  stmtField,
   counterpartField,
   recurringNote,
   h('div', { class: 'sheet-actions' },
@@ -883,6 +996,12 @@ function periodLabel(period) {
 }
 function signedAmount(kind, amount) {
   return kind === 'in' ? `+${formatPence(amount)}` : kind === 'out' ? `−${formatPence(amount)}` : formatPence(amount);
+}
+function itemStatementCard(item) {
+  return statementCardFor(item, state.ledger.accounts);
+}
+function itemAmountText(item) {
+  return itemStatementCard(item) ? 'statement balance' : signedAmount(item.kind, item.amount);
 }
 function itemAccountsText(item) {
   const name = (id) => accountById(id)?.name ?? 'missing account';
@@ -950,6 +1069,15 @@ function openOccurrenceDialog(itemId, period) {
   const seriesBtn = h('button', { type: 'button', class: 'btn-ghost', onclick: () => { close(); openRecurringEditor(itemId); } }, 'Edit series…');
 
   const today = todayIso();
+  const st = p.statement ?? null;
+  const card = st ? accountById(item.toAccountId) : null;
+  const stmtLine = st
+    ? h('p', { class: 'stmt-info' },
+        st.beforeRecords
+          ? `Pays the ${longDate(st.date)} statement, which is from before your records start — so this is your estimate. Put in the real figure from the statement and tap “Save for this month only”.`
+          : [`Pays the ${longDate(st.date)} statement: ${formatPence(st.owed)} owed${st.date > today ? ' so far (it isn’t produced yet)' : ''}. To pay a different amount this month, change it and tap “Save for this month only”. `,
+              h('button', { type: 'button', class: 'btn-link', onclick: () => openStatementDialog(card.id, st.month) }, 'View statement…')])
+    : null;
   const status = p.skipped
     ? `Skipped for ${periodLabel(period)}.`
     : p.date < today ? `Due ${longDate(p.date)} — not confirmed yet.`
@@ -967,6 +1095,7 @@ function openOccurrenceDialog(itemId, period) {
         h('p', { class: `rec-status ${p.date <= today ? 'rec-due' : ''}` }, status,
           p.number ? ` Payment ${p.number.n} of ${p.number.of}${p.number.n === p.number.of ? ' — the last one' : ''}.` : null,
           p.changed ? h('span', { class: 'muted' }, ` Changed for this month (series: ${longDate(p.seriesDate)}, ${formatPence(p.seriesAmount)}).`) : null),
+        stmtLine,
         h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount),
         h('div', { class: 'field-pair' },
           h('label', { class: 'field' }, h('span', {}, 'Date'), date),
@@ -981,9 +1110,91 @@ function openOccurrenceDialog(itemId, period) {
       account ? swatch(account) : null,
       h('h2', {}, `↻ ${item.description}`),
       h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: close }, '✕')),
-    h('p', { class: 'muted small rec-summary' }, `${itemAccountsText(item)} · ${signedAmount(item.kind, item.amount)}${item.finalAmount != null && item.endDate ? ` (last ${formatPence(item.finalAmount)})` : ''} · ${describeRule(item)}`),
+    h('p', { class: 'muted small rec-summary' }, `${itemAccountsText(item)} · ${itemAmountText(item)}${item.finalAmount != null && item.endDate ? ` (last ${formatPence(item.finalAmount)})` : ''} · ${describeRule(item, itemStatementCard(item))}`),
     body));
   openDialog(dlg);
+}
+
+// ------------------------------------------------------------------ card statement dialog
+
+/**
+ * One statement: what's owed, the payment, and the entries near the
+ * statement date with a This / Next statement switch for each.
+ */
+function openStatementDialog(cardId, month) {
+  const dlg = $('txDialog');
+  const card = accountById(cardId);
+  if (!card || !statementConfig(card)) return;
+  const s = institutionStyle(card.institution);
+
+  const move = async (txId, chosen, byDate) => {
+    const next = attempt(() => setStatementMonth(state.ledger, txId, chosen === byDate ? null : chosen));
+    if (!next) return;
+    await commit(next);
+    draw();
+    toast(`Moved to the ${stmtLabel(chosen, card)} statement`);
+  };
+
+  function paymentBlock(view, st) {
+    const item = statementItemFor(card);
+    const period = addMonths(month, 1);
+    if (!item) {
+      return h('p', { class: 'muted small' }, `Payment due ${longDate(st.dueDate)}. To have it filled in for you, set up a recurring transfer to ${card.name} and tick “Pay the statement balance” (⚙ → Manage recurring items).`);
+    }
+    const paid = state.ledger.transactions.find((t) => t.scheduledItemId === item.id && t.scheduledPeriod === period && t.accountId === card.id);
+    if (paid) return h('p', { class: 'stmt-pay' }, `✓ Paid ${formatPence(paid.amount)} on ${longDate(paid.date)}${paid.amount < st.owed ? ` — ${formatPence(st.owed - paid.amount)} carried to the next statement` : ''}.`);
+    const proj = view.transactions.find((t) => t.isProjected && t.scheduledItemId === item.id && t.scheduledPeriod === period && t.accountId === card.id)?.projection;
+    if (proj) {
+      return h('div', { class: 'stmt-pay' },
+        h('p', {}, `↻ ${proj.skipped ? 'Skipped' : `${formatPence(proj.amount)} on ${longDate(proj.date)}`} from ${accountById(item.accountId)?.name ?? 'account'}`,
+          proj.changed ? h('span', { class: 'muted' }, ` (changed for this month — statement says ${formatPence(proj.seriesAmount)})`) : null),
+        h('button', { type: 'button', class: 'btn-secondary btn-small', onclick: () => openOccurrenceDialog(item.id, period) }, 'Change or confirm the payment…'));
+    }
+    if (st.dueDate > projectionEnd()) return h('p', { class: 'muted small' }, `Payment due ${longDate(st.dueDate)} — beyond the months shown.`);
+    return h('p', { class: 'muted small' }, `Nothing to pay (due ${longDate(st.dueDate)}).`);
+  }
+
+  function draw() {
+    const view = viewLedger();
+    const st = statementFor(view, card, month, state.holidays);
+    if (!st || st.beforeRecords) { dlg.close(); return; }
+    const today = todayIso();
+    const lo = new Date(Date.parse(st.date) - 3 * 86400000).toISOString().slice(0, 10);
+    const hi = new Date(Date.parse(st.date) + 3 * 86400000).toISOString().slice(0, 10);
+    const next = addMonths(month, 1);
+    const near = state.ledger.transactions
+      .filter((t) => t.accountId === card.id && t.kind !== 'note' && ((t.date >= lo && t.date <= hi) || t.statementMonth === month || (t.statementMonth === next && t.date <= st.date)))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const rows = near.map((t) => {
+      const byDate = statementMonthByDate(card, t.date, state.holidays);
+      const eff = t.statementMonth || byDate;
+      const btn = (m, label) => h('button', {
+        type: 'button', role: 'radio', class: 'seg-btn', 'aria-checked': String(eff === m),
+        onclick: () => (eff === m ? null : move(t.id, m, byDate)),
+      }, label);
+      return h('li', { class: 'stmt-row' },
+        h('span', { class: 'stmt-row-main' },
+          h('span', { class: 'stmt-row-desc' }, t.description || '(no description)'),
+          h('span', { class: 'muted small' }, `${longDate(t.date)} · ${t.direction === 'credit' ? '+' : ''}${formatPence(t.amount)}${eff !== byDate ? ' · moved' : ''}`)),
+        h('div', { class: 'seg seg-small', role: 'radiogroup' }, btn(month, 'This'), btn(next, 'Next')));
+    });
+
+    dlg.replaceChildren(h('div', { class: 'sheet-body' },
+      h('header', { class: 'sheet-head', style: { '--acc': s.colour } },
+        swatch(card),
+        h('h2', {}, `${card.name} statement · ${longDate(st.date)}`),
+        h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
+      h('div', { class: 'stmt-owed' },
+        h('span', { class: 'muted small' }, st.date > today ? 'Owed so far (not produced yet)' : 'Owed on this statement'),
+        h('strong', {}, formatPence(st.owed))),
+      paymentBlock(view, st),
+      h('h3', { class: 'stmt-h' }, 'Entries near the statement date'),
+      h('p', { class: 'muted small' }, 'Something bought on (or just before) the statement date sometimes only appears on the next statement. If the real statement differs, move the entry — the amount owed and the payment follow.'),
+      rows.length ? h('ul', { class: 'stmt-rows' }, rows) : h('p', { class: 'muted small' }, `Nothing on ${card.name} within 3 days of ${longDate(st.date)}.`),
+      h('p', { class: 'muted small' }, 'If the total still doesn’t match the real statement, an entry is probably missing (interest, cashback, a refund) — add it and it’s counted here.')));
+  }
+  draw();
+  if (!dlg.open) openDialog(dlg);
 }
 
 // ------------------------------------------------------------------ recurring: manager + editor
@@ -992,7 +1203,7 @@ function renderRecurringManager() {
   const dlg = $('recurringDialog');
   const today = todayIso();
   const items = recurringItems(state.ledger)
-    .map((item) => ({ item, next: upcomingDates(item, today, 1, state.holidays)[0] ?? null }))
+    .map((item) => ({ item, next: upcomingDates(item, today, 1, state.holidays, itemStatementCard(item))[0] ?? null }))
     .sort((a, b) => (a.next ?? '9999').localeCompare(b.next ?? '9999') || a.item.description.localeCompare(b.item.description));
 
   const list = items.length
@@ -1003,9 +1214,9 @@ function renderRecurringManager() {
           acc ? swatch(acc) : null,
           h('span', { class: 'rec-main' },
             h('span', { class: 'rec-name' }, item.description),
-            h('span', { class: 'muted small' }, `${describeRule(item)} · ${itemAccountsText(item)}`),
+            h('span', { class: 'muted small' }, `${describeRule(item, itemStatementCard(item))} · ${itemAccountsText(item)}`),
             h('span', { class: 'small' }, ended ? `Ended${item.endDate ? ` ${longDate(item.endDate)}` : ''}` : `Next: ${longDate(next)}${nextNumberText(item)}`)),
-          h('span', { class: `rec-amt ${item.kind === 'in' ? 'credit' : ''}` }, signedAmount(item.kind, item.amount))));
+          h('span', { class: `rec-amt ${item.kind === 'in' ? 'credit' : ''}` }, itemStatementCard(item) ? 'statement' : signedAmount(item.kind, item.amount))));
       }))
     : h('p', { class: 'muted' }, 'None yet. Add salary, direct debits, subscriptions and card payments here — they then appear ahead of time in your accounts, ready to confirm.');
 
@@ -1049,6 +1260,15 @@ function openRecurringEditor(itemId) {
   const accountLabel = h('span', {}, 'Account');
   const toField = h('label', { class: 'field' }, h('span', {}, 'To (e.g. the credit card)'), toAccount);
   const amount = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input', placeholder: '0.00', value: existing ? penceToInput(existing.amount) : '' });
+  const amountLabel = h('span', {}, 'Amount (£)');
+  const amountHint = h('div', { class: 'muted small', hidden: true }, 'Only used for a statement from before your records start (e.g. the one this month’s payment pays). Can be left blank.');
+  const payStmt = h('input', { type: 'checkbox', checked: Boolean(existing?.payStatement) });
+  const payStmtText = h('span', {});
+  const payStmtField = h('div', { class: 'field' }, h('label', { class: 'check' }, payStmt, payStmtText));
+  const payStmtHint = h('div', { class: 'muted small' });
+  payStmtField.append(payStmtHint);
+  const statementCardSelected = () => (kind === 'transfer' ? accountById(toAccount.value) : null);
+  const payingStatement = () => payStmt.checked && Boolean(statementConfig(statementCardSelected()));
 
   const every = existing?.everyMonths ?? 1;
   const freq = h('select', {},
@@ -1071,10 +1291,24 @@ function openRecurringEditor(itemId) {
       h('option', { value: v, selected: (existing?.shift ?? 'none') === v }, l)));
   const startHint = h('div', { class: 'muted small' });
   const preview = h('div', { class: 'rec-preview' });
+  const freqDayPair = h('div', { class: 'field-pair' },
+    h('label', { class: 'field' }, h('span', {}, 'Repeats'), freq),
+    h('label', { class: 'field' }, h('span', {}, 'Day of the month'), day));
+  const shiftField = h('label', { class: 'field' }, h('span', {}, 'If it lands on a weekend or bank holiday'), shift);
 
   function draft() {
+    if (payingStatement()) {
+      return {
+        description: desc.value, kind, accountId: account.value, toAccountId: toAccount.value,
+        amount: amount.value.trim() === '' ? 0 : parseAmount(amount.value), everyMonths: 1,
+        day: Number.parseInt(day.value, 10) || existing?.day || 1,
+        startDate: start.value, endDate: end.value || null, shift: 'after', finalAmount: null,
+        firstNumber: existing?.firstNumber ?? 1, payStatement: true,
+      };
+    }
     const everyMonths = freq.value === 'n' ? Number.parseInt(nMonths.value, 10) : Number(freq.value);
     return {
+      payStatement: false,
       description: desc.value, kind, accountId: account.value, toAccountId: kind === 'transfer' ? toAccount.value : null,
       amount: parseAmount(amount.value), everyMonths, day: Number.parseInt(day.value, 10),
       startDate: start.value, endDate: end.value || null, shift: shift.value,
@@ -1086,12 +1320,30 @@ function openRecurringEditor(itemId) {
     for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === kind));
     toField.hidden = kind !== 'transfer';
     accountLabel.textContent = kind === 'transfer' ? 'From' : 'Account';
-    nField.hidden = freq.value !== 'n';
-    endFields.hidden = !end.value;
-    startHint.textContent = freq.value === '1' ? 'Nothing before this date.' : 'Nothing before this date — and it repeats counting from this month.';
+    // statement payment: only for a transfer to a credit card
+    const card = statementCardSelected();
+    const cardCfg = statementConfig(card);
+    payStmtField.hidden = card?.type !== 'credit';
+    payStmt.disabled = !cardCfg;
+    payStmtText.textContent = cardCfg
+      ? `Pay the statement balance on its due date (${cardCfg.paymentDays} days after the statement)`
+      : 'Pay the statement balance on its due date';
+    payStmtHint.textContent = cardCfg
+      ? 'The amount and date fill themselves in from the card’s statement. To pay less one month, change that month’s entry.'
+      : card?.type === 'credit' ? `Set ${card.name}’s statement date first (its Account… button).` : '';
+    const stmtOn = payingStatement();
+    for (const el of [freqDayPair, shiftField]) el.hidden = stmtOn;
+    amountLabel.textContent = stmtOn ? 'Estimate (£)' : 'Amount (£)';
+    amountHint.hidden = !stmtOn;
+    nField.hidden = stmtOn || freq.value !== 'n';
+    endFields.hidden = stmtOn || !end.value;
+    startHint.textContent = freq.value === '1' || stmtOn ? 'Nothing before this date.' : 'Nothing before this date — and it repeats counting from this month.';
     const d = draft();
     let text = '';
-    if (d.day >= 1 && d.day <= 31 && d.everyMonths >= 1 && d.everyMonths <= 12 && d.startDate) {
+    if (stmtOn && d.startDate) {
+      const next = upcomingDates(d, todayIso(), 3, state.holidays, card);
+      text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
+    } else if (d.day >= 1 && d.day <= 31 && d.everyMonths >= 1 && d.everyMonths <= 12 && d.startDate) {
       const next = upcomingDates(d, todayIso(), 3, state.holidays);
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
       if (d.endDate && d.endDate >= d.startDate && d.firstNumber >= 1) {
@@ -1111,7 +1363,7 @@ function openRecurringEditor(itemId) {
     preview.hidden = !text;
   }
   for (const el of [freq, nMonths, day, start, end, shift, finalAmt, firstNo, amount]) el.addEventListener('input', sync);
-  for (const el of [freq, shift, account]) el.addEventListener('change', sync);
+  for (const el of [freq, shift, account, toAccount, payStmt]) el.addEventListener('change', sync);
 
   const form = h('form', {
     method: 'dialog', class: 'sheet-body',
@@ -1119,7 +1371,7 @@ function openRecurringEditor(itemId) {
       e.preventDefault();
       const d = draft();
       if (d.amount === null) return toast('Enter an amount like 12.34', 'error');
-      if (Number.isNaN(d.day)) return toast('Day of the month must be 1 to 31', 'error');
+      if (!d.payStatement && Number.isNaN(d.day)) return toast('Day of the month must be 1 to 31', 'error');
       if (Number.isNaN(d.everyMonths)) return toast('Repeat every 1 to 12 months', 'error');
       if (end.value && finalAmt.value.trim() && d.finalAmount === null) return toast('Enter the last payment like 12.34, or leave it blank', 'error');
       if (Number.isNaN(d.firstNumber)) return toast('First payment number must be 1 to 999', 'error');
@@ -1139,17 +1391,16 @@ function openRecurringEditor(itemId) {
   h('label', { class: 'field' }, h('span', {}, 'Description'), desc),
   seg,
   h('div', { class: 'field-pair' }, h('label', { class: 'field' }, accountLabel, account), toField),
-  h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount),
-  h('div', { class: 'field-pair' },
-    h('label', { class: 'field' }, h('span', {}, 'Repeats'), freq),
-    h('label', { class: 'field' }, h('span', {}, 'Day of the month'), day)),
+  payStmtField,
+  h('label', { class: 'field' }, amountLabel, amount, amountHint),
+  freqDayPair,
   nField,
   h('div', { class: 'field-pair' },
     h('label', { class: 'field' }, h('span', {}, 'From'), start),
     h('label', { class: 'field' }, h('span', {}, 'To (blank = no end)'), end)),
   startHint,
   endFields,
-  h('label', { class: 'field' }, h('span', {}, 'If it lands on a weekend or bank holiday'), shift),
+  shiftField,
   preview,
   h('div', { class: 'sheet-actions' },
     existing ? h('button', {
@@ -1183,8 +1434,37 @@ function openAccountDialog(accountId) {
   const openingLabel = h('span', {});
   const openingDate = h('input', { type: 'date', required: true, value: existing?.openingDate ?? firstOfMonthIso() });
   const hidden = h('input', { type: 'checkbox', checked: existing ? !existing.active : false });
+
+  // Card statements (v0.7)
+  const cc = existing?.creditCard ?? null;
+  const stmtDay = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', placeholder: 'e.g. 13', value: cc?.statementWorkingDay ?? '' });
+  const payDays = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', placeholder: String(DEFAULT_PAYMENT_DAYS), value: cc?.paymentDaysAfter ?? '' });
+  const stmtPreview = h('div', { class: 'muted small' });
+  const readInt = (input) => (input.value.trim() === '' ? null : Number(input.value.trim()));
+  const stmtSection = h('fieldset', { class: 'stmt-settings' },
+    h('legend', {}, 'Statements'),
+    h('div', { class: 'field-pair' },
+      h('label', { class: 'field' }, h('span', {}, 'Statement on working day no.'), stmtDay),
+      h('label', { class: 'field' }, h('span', {}, 'Payment due, days after'), payDays)),
+    stmtPreview,
+    h('div', { class: 'muted small' }, 'Working days skip weekends and bank holidays; a due date on one moves to the next working day. Barclaycard: 13 and 25. Leave the first box blank if you don’t want statements for this card.'));
+  function syncStatementPreview() {
+    const wd = readInt(stmtDay);
+    const days = readInt(payDays) ?? DEFAULT_PAYMENT_DAYS;
+    if (wd === null) { stmtPreview.textContent = 'No statements for this card.'; return; }
+    if (!Number.isInteger(wd) || wd < 1 || wd > 20 || !Number.isInteger(days) || days < 1 || days > 60) { stmtPreview.textContent = 'Working day 1–20, days 1–60.'; return; }
+    const probe = { type: 'credit', creditCard: { statementWorkingDay: wd, paymentDaysAfter: days } };
+    const today = todayIso();
+    let m = monthOf(today);
+    if (statementDate(probe, m, state.holidays) < today) m = addMonths(m, 1);
+    stmtPreview.textContent = `Next statement ${longDate(statementDate(probe, m, state.holidays))} · payment due ${longDate(paymentDueDate(probe, m, state.holidays))}`;
+  }
+  for (const el of [stmtDay, payDays]) el.addEventListener('input', syncStatementPreview);
+  syncStatementPreview();
+
   const syncType = () => {
     openingLabel.textContent = type.value === 'credit' ? 'Amount owed at opening date (£)' : 'Opening balance (£)';
+    stmtSection.hidden = type.value !== 'credit';
   };
   type.addEventListener('change', syncType);
   syncType();
@@ -1199,6 +1479,17 @@ function openAccountDialog(accountId) {
       const pence = raw === '' ? 0 : parseAmount(negative ? raw.slice(1) : raw);
       if (pence === null) return toast('Opening balance should look like 1234.56', 'error');
       const fields = { name: name.value, type: type.value, institution: inst.value, openingBalance: negative ? -pence : pence, openingDate: openingDate.value };
+      if (type.value === 'credit') {
+        const wd = readInt(stmtDay);
+        const days = readInt(payDays);
+        if (wd !== null && Number.isNaN(wd)) return toast('Statement working day should be a number 1–20', 'error');
+        if (days !== null && Number.isNaN(days)) return toast('Payment days should be a number 1–60', 'error');
+        fields.creditCard = {
+          ...(cc ?? { nextStatementDateOverride: null, statementBalance: 0 }),
+          statementWorkingDay: wd,
+          paymentDaysAfter: wd === null ? cc?.paymentDaysAfter ?? null : days,
+        };
+      }
       let next;
       if (existing) next = attempt(() => updateAccount(state.ledger, existing.id, { ...fields, name: fields.name.trim(), active: !hidden.checked }));
       else {
@@ -1222,6 +1513,7 @@ function openAccountDialog(accountId) {
   h('div', { class: 'field-pair' },
     h('label', { class: 'field' }, openingLabel, opening),
     h('label', { class: 'field' }, h('span', {}, 'Opening date'), openingDate)),
+  stmtSection,
   existing ? h('label', { class: 'check' }, hidden, h('span', {}, 'Hide this account (keeps its history)')) : null,
   h('div', { class: 'sheet-actions' },
     existing ? h('button', {
