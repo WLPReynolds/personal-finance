@@ -4,11 +4,38 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.12.0 — Envelopes (Monzo pots)
+## Status: v0.13.0 — Ticket purchases on the card
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**New in v0.13.0 — ticket purchases** (spec: Project doc `claude/ticket-purchases-spec.md`)
+- **⚙ → Ticket purchases → Show ticket purchases from the ticket tracker.**
+  Pick the card (Barclaycard), the envelope the money is ring-fenced from
+  (Transport · Monzo pots), the ring-fence account (Safe keeping), where it
+  goes back to (Current Account), and **Start from** (the day you switch it
+  on; tickets bought before it are left out). Save reads the tracker's file
+  straight away. Needs Drive sync on.
+- Each ticket in the tracker's `transport-estimates.json` appears on the card
+  on its purchase day, with the same amount moved Transport → Safe keeping
+  the same day (🎟). Forecasts are faded and simply move when the tracker's
+  plan changes. They count in the card's projected statement payment.
+- **Bought — tap to confirm** (amber): the tracker says you've bought it.
+  Tap → check the date/price (and This/Next statement near a statement
+  date) → **Confirm** adds the card spend and its ring-fence. Forecasts can't
+  be confirmed — record the purchase in the tracker first.
+- **Red rows** need action: **Overdue** (a forecast purchase date passed and
+  the tracker hasn't recorded it — shown on today's date until it does) and
+  **No longer in the ticket tracker** (a confirmed ticket whose id has gone
+  from the file — delete it and confirm the new one).
+- **Ring-fence it** tick box on any spend on the card (e.g. parking): makes
+  the Transport → Safe keeping transfer too, which follows the spend when
+  you edit it, and goes when you delete it or untick the box.
+- **Ring-fenced money back** (🔒): one projected transfer Safe keeping →
+  Current Account per statement, the calendar day before the card's payment
+  date, adding up everything ring-fenced on that statement. Tap to see what's
+  in it and confirm.
 
 **New in v0.12.0 — envelopes (Monzo pots)**
 - **Account… → Envelopes → Split this account into envelopes (pots).** Add
@@ -310,7 +337,8 @@ just clears the old offline cache.
 - `src/app.js` — all UI (list view, grid view, dialogs, settings, export/import)
 - `src/store.js` — IndexedDB load/save (ledger, meta, sync state); encrypts every record while the passphrase lock is on (v0.10)
 - `src/lib/vault.js` — passphrase lock: key derivation, key wrapping, value encryption (v0.10)
-- `src/lib/tracker-estimates.js` — the ticket tracker's published figures: file checks, lookup by month, reading from Drive (v0.11)
+- `src/lib/tracker-estimates.js` — the ticket tracker's published figures: file checks, lookup by month, reading from Drive (v0.11); the ticket list (v0.13)
+- `src/lib/tickets.js` — ticket purchases: settings, projected tickets, confirm, ring-fence, money back before the card payment (v0.13)
 - `src/google-auth.js` — Google sign-in (GIS token client; tap-only)
 - `src/drive.js` — Drive REST adapter (find/create folder+file, download, save)
 - `src/lib/sync-engine.js` — sync orchestration (push / pull / merge / clashes / lost-save recovery)
@@ -353,5 +381,5 @@ just clears the old offline cache.
 npm test
 ```
 
-228 tests (incl. envelopes, two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py` (and the others in `dev/e2e/`).
+253 tests (incl. ticket purchases, envelopes, two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py`, `tickets_v013.py` (and the others in `dev/e2e/`).

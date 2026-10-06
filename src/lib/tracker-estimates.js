@@ -23,6 +23,13 @@ export const TRACKER_FORMAT = 'transport-estimates';
 export const TRACKER_FORMAT_VERSION = 1;
 /** Don't look on Drive more often than this during ordinary syncs ("Check now" ignores it). */
 export const TRACKER_CHECK_MS = 5 * 60 * 1000;
+/**
+ * v0.13: how this version reads the file. A cached copy read by an older
+ * version (no `tickets` read) is downloaded again once, even though the file
+ * itself hasn't changed.
+ */
+export const TRACKER_READER = 2;
+const TICKET_ID_RE = /^[pf]-\d{4}-\d{2}-\d{2}$/;
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const isMonth = (v) => typeof v === 'string' && MONTH_RE.test(v);
@@ -79,6 +86,7 @@ export function parseTrackerEstimates(text) {
       parkingDays: p.parkingDays, parkingPence: p.parkingPence, totalPence: p.totalPence,
     });
   }
+  const tickets = parseTickets(data.tickets);
   const a = data.assumptions;
   return {
     ok: true,
@@ -90,8 +98,36 @@ export function parseTrackerEstimates(text) {
         ? { ticketPricePence: count(a.ticketPricePence) ? a.ticketPricePence : null, parkingDayPence: count(a.parkingDayPence) ? a.parkingDayPence : null }
         : null,
       periods,
+      // v0.13: null = no list in the file (older tracker); a bad list is ignored on its own (periods still used)
+      tickets: tickets.ok ? tickets.tickets : null,
+      ticketsError: tickets.ok ? null : tickets.error,
     },
   };
+}
+
+/**
+ * v0.13 — the `tickets` list (ticket-purchases-spec.md). Checked separately:
+ * a bad list never throws away good periods. Absent → { ok: true, tickets: null }.
+ */
+function parseTickets(list) {
+  if (list === undefined || list === null) return { ok: true, tickets: null };
+  if (!Array.isArray(list)) return { ok: false, error: 'The ticket tracker’s ticket list isn’t a list — ticket purchases not shown.' };
+  const out = [];
+  const seen = new Set();
+  for (const [i, t] of list.entries()) {
+    const bad = (why) => ({ ok: false, error: `The ticket tracker’s ticket ${i + 1}${typeof t?.id === 'string' ? ` (${t.id})` : ''} ${why} — ticket purchases not shown.` });
+    if (!t || typeof t !== 'object') return bad('isn’t an object');
+    if (t.status !== 'bought' && t.status !== 'projected') return bad('has a status other than bought or projected');
+    if (typeof t.id !== 'string' || !TICKET_ID_RE.test(t.id) || t.id[0] !== (t.status === 'bought' ? 'p' : 'f')) return bad('has an id that isn’t p-/f- and a date');
+    if (seen.has(t.id)) return bad('appears twice');
+    seen.add(t.id);
+    if (!isRealDate(t.validFrom) || !isRealDate(t.validTo) || !isRealDate(t.purchaseDate)) return bad('has an invalid date');
+    if (t.validTo < t.validFrom) return bad('ends before it starts');
+    if (!count(t.pricePence) || t.pricePence === 0) return bad('has a price that isn’t whole pence');
+    out.push({ id: t.id, validFrom: t.validFrom, validTo: t.validTo, purchaseDate: t.purchaseDate, pricePence: t.pricePence, status: t.status });
+  }
+  out.sort((x, y) => x.purchaseDate.localeCompare(y.purchaseDate) || x.id.localeCompare(y.id));
+  return { ok: true, tickets: out };
 }
 
 /** The tracker's period for a payment month ('YYYY-MM'), or null. */
@@ -101,7 +137,8 @@ export function trackerPeriodFor(estimates, month) {
 
 /** Does any recurring item take its amount from the tracker? (Nothing is fetched otherwise.) */
 export function usesTracker(ledger) {
-  return (ledger?.scheduledItems ?? []).some((r) => r?.recordType === 'recurring' && r.amountFrom === TRACKER_SOURCE && !r.payStatement);
+  return (ledger?.scheduledItems ?? []).some((r) => (r?.recordType === 'recurring' && r.amountFrom === TRACKER_SOURCE && !r.payStatement)
+    || (r?.recordType === 'ticketPurchases' && r.enabled)); // v0.13 ticket purchases (tickets.js)
 }
 
 /**
@@ -127,7 +164,7 @@ export async function refreshTrackerEstimates({ drive, token, cached, now = () =
   if (!f) {
     return { fileId: null, version: null, checkedAt, estimates: keep, error: 'The ticket tracker hasn’t shared its figures yet (no transport-estimates.json in Drive).' };
   }
-  if (cached && cached.fileId === f.id && cached.version === f.version && (cached.estimates || cached.error)) {
+  if (cached && cached.fileId === f.id && cached.version === f.version && (cached.estimates || cached.error) && cached.reader === TRACKER_READER) {
     return { ...cached, checkedAt }; // unchanged since last read
   }
   let text;
@@ -139,6 +176,6 @@ export async function refreshTrackerEstimates({ drive, token, cached, now = () =
   }
   const parsed = parseTrackerEstimates(text);
   return parsed.ok
-    ? { fileId: f.id, version: f.version, checkedAt, estimates: parsed.estimates, error: null }
-    : { fileId: f.id, version: f.version, checkedAt, estimates: keep, error: parsed.error };
+    ? { fileId: f.id, version: f.version, reader: TRACKER_READER, checkedAt, estimates: parsed.estimates, error: null }
+    : { fileId: f.id, version: f.version, reader: TRACKER_READER, checkedAt, estimates: keep, error: parsed.error };
 }

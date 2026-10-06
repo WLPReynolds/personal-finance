@@ -47,8 +47,12 @@ import {
 import {
   TRACKER_SOURCE, TRACKER_CHECK_MS, refreshTrackerEstimates, usesTracker, trackerPeriodFor,
 } from './lib/tracker-estimates.js';
+import {
+  ticketSettings, ticketSettingsRecord, ticketSettingsProblem, setTicketSettings, confirmTicket, confirmReturn,
+  isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
+} from './lib/tickets.js';
 
-export const APP_VERSION = '0.12.0';
+export const APP_VERSION = '0.13.0';
 
 const state = {
   ledger: null,
@@ -206,12 +210,29 @@ function projectionEnd() {
 /** The ledger plus projected entries from recurring items — for display only, never saved. */
 function viewLedger() {
   const end = projectionEnd();
-  return withStatements(withProjections(state.ledger, end, state.holidays, sources()), end, state.holidays);
+  return markTicketAlerts(withStatements(withProjections(state.ledger, end, state.holidays, sources()), end, state.holidays));
 }
-/** v0.11: extra inputs for projections — the ticket tracker's published figures, if read. */
+/** v0.11: extra inputs for projections — the ticket tracker's published figures, if read. v0.13: today (tickets). */
 function sources() {
-  return { tracker: state.tracker?.estimates ?? null };
+  return { tracker: state.tracker?.estimates ?? null, today: todayIso() };
 }
+/**
+ * v0.13: confirmed tickets that have gone from the tracker's file (and their
+ * ring-fence legs) get `ticketAlert` on the view copy — drawn as a red row.
+ */
+function markTicketAlerts(view) {
+  if (!ticketSettings(state.ledger)) return view;
+  const missing = ticketsMissingFromTracker(state.ledger, state.tracker?.estimates, todayIso());
+  if (!missing.size) return view;
+  return { ...view, transactions: view.transactions.map((t) => (missing.has(t.id) || missing.has(t.ringFenceOf) ? { ...t, ticketAlert: true } : t)) };
+}
+/** Tap on a projected row: a recurring month, a ticket (v0.13), or the money moved back before a card payment. */
+function openProjection(p) {
+  if (p.kind === 'ticket') return openTicketDialog(p.ticket.id);
+  if (p.kind === 'ticketReturn') return openReturnDialog(p.statementMonth);
+  return openOccurrenceDialog(p.itemId, p.period);
+}
+const ALERT_MISSING = 'No longer in the ticket tracker — tap';
 function hasRecurring() {
   return recurringItems(state.ledger).length > 0;
 }
@@ -257,6 +278,15 @@ async function loadHolidays() {
 }
 /** Class + short label for a projected entry: skipped / due (amber) / projected. */
 function projectionTags(p, today) {
+  if (p.kind === 'ticket') {
+    if (p.bought) return { cls: 'overdue', label: 'Bought — tap to confirm' };
+    if (p.overdue) return { cls: 'alert', label: `Overdue — due ${new Date(p.seriesDate + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}, not bought yet` };
+    return { cls: '', label: 'projected · ticket tracker' };
+  }
+  if (p.kind === 'ticketReturn') {
+    if (p.date <= today) return { cls: 'overdue', label: p.date === today ? 'due today · tap to confirm' : 'not confirmed yet' };
+    return { cls: '', label: 'projected · ring-fenced money back' };
+  }
   if (p.skipped) return { cls: 'skipped', label: 'skipped' };
   if (p.date <= today) return { cls: 'overdue', label: p.date === today ? 'due today · tap to confirm' : 'not confirmed yet' };
   const from = p.amountSource === 'tracker' && p.amount === p.seriesAmount ? ' · ticket tracker'
@@ -674,17 +704,17 @@ function renderList(accounts) {
     const other = counterpartOf(view, t);
     const otherAcc = other ? accountById(other.accountId) : null;
     const p = t.isProjected ? t.projection : null;
-    const tags = p ? projectionTags(p, today) : null;
+    const tags = p ? projectionTags(p, today) : t.ticketAlert ? { cls: 'alert', label: ALERT_MISSING } : null;
     const env = envTag(t, active);
     const move = isEnvelopeMove(t);
     feed.append(h('li', {},
       h('button', {
         type: 'button',
         class: `entry ${t.kind === 'note' ? 'entry-note' : ''} ${t.date > today ? 'future' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''}`,
-        onclick: () => (p ? openOccurrenceDialog(p.itemId, p.period) : openTxDialog({ txId: t.id })),
+        onclick: () => (p ? openProjection(p) : openTxDialog({ txId: t.id })),
       },
         h('span', { class: 'entry-main' },
-          h('span', { class: 'entry-desc' }, p ? h('span', { class: 'rec-icon', 'aria-label': 'Recurring' }, '↻ ') : null,
+          h('span', { class: 'entry-desc' }, p ? h('span', { class: 'rec-icon', 'aria-label': p.itemId ? 'Recurring' : 'Ticket purchases' }, p.itemId ? '↻ ' : p.kind === 'ticketReturn' ? '🔒 ' : '🎟 ') : null,
             h('span', { class: 'desc-text' }, t.description || '(no description)'),
             t.seriesNo ? h('span', { class: 'series-no' }, numberLabel(t.seriesNo)) : null),
           otherAcc || tags || t.stmtTag || env ? h('span', { class: 'entry-link' },
@@ -750,6 +780,7 @@ function renderGrid(accounts) {
   const rows = buildGridRows(view, accounts);
   const today = todayIso();
   const reconciledIds = new Set(state.ledger.transactions.filter(isReconciled).map((t) => t.id));
+  const alertIds = new Set(view.transactions.filter((t) => t.ticketAlert).map((t) => t.id));
   const envAccounts = accounts.filter((a) => envelopeConfig(a));
   const txById = envAccounts.length ? new Map(view.transactions.map((t) => [t.id, t])) : null;
   /** envelope tag for a grid row: from its leg on the envelope account */
@@ -820,8 +851,9 @@ function renderGrid(accounts) {
       continue;
     }
     const p = row.projection;
-    const tags = p ? projectionTags(p, today) : null;
-    const openRow = () => (p ? openOccurrenceDialog(p.itemId, p.period) : openTxDialog({ txId: row.txIds[0] }));
+    const alert = !p && row.txIds.some((id) => alertIds.has(id));
+    const tags = p ? projectionTags(p, today) : alert ? { cls: 'alert', label: ALERT_MISSING } : null;
+    const openRow = () => (p ? openProjection(p) : openTxDialog({ txId: row.txIds[0] }));
     const env = rowEnvTag(row);
     const tr = h('tr', {
       class: `${monthStart} ${row.kind === 'note' ? 'row-note' : ''} ${future ? 'future' : ''} ${row.date === today ? 'is-today' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''}`,
@@ -829,11 +861,12 @@ function renderGrid(accounts) {
     },
       h('td', { class: 'sticky-l c-date clickable', onclick: openRow }, shortDate(row.date)),
       h('td', { class: 'sticky-l2 c-desc clickable', title: `${row.description}${row.seriesNo ? ` ${numberLabel(row.seriesNo)}` : ''}${p ? ` — ${tags.label}` : ''}`, onclick: openRow },
-        p ? h('span', { class: 'rec-icon', title: `Recurring — ${tags.label}` }, '↻ ') : null,
+        p ? h('span', { class: 'rec-icon', title: `${p.itemId ? 'Recurring' : 'Ticket purchases'} — ${tags.label}` }, p.itemId ? '↻ ' : p.kind === 'ticketReturn' ? '🔒 ' : '🎟 ') : null,
         row.isTransfer ? h('span', { class: 'link-icon', title: 'Linked transfer' }, '⇄ ') : null, row.description,
         row.seriesNo ? h('span', { class: 'series-no' }, ` ${numberLabel(row.seriesNo)}`) : null,
         row.stmtTag ? h('span', { class: 'stmt-tag' }, ` ${stmtTagText(row.stmtTag.tag, row.stmtTag.month, accountById(Object.keys(row.cells).find((id) => statementConfig(accountById(id)))) ?? accounts[0])}`) : null,
-        env ? h('span', { class: `env-tag ${env.cls}` }, ` · ${env.text}`) : null));
+        env ? h('span', { class: `env-tag ${env.cls}` }, ` · ${env.text}`) : null,
+        tags && (p ? !p.itemId && tags.cls : true) ? h('span', { class: tags.cls === 'alert' ? 'alert-tag' : 'rec-tag' }, ` · ${tags.label}`) : null));
     for (const a of accounts) {
       const cell = row.cells[a.id];
       const rec = cell?.txId && reconciledIds.has(cell.txId) ? ' is-rec' : '';
@@ -999,9 +1032,11 @@ function openTxDialog(opts) {
   }
   amount.addEventListener('input', () => picker.refresh());
   counterpartSelect.addEventListener('change', syncEnvelope);
+  counterpartSelect.addEventListener('change', () => syncKind());
 
   function syncKind() {
     for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === kind));
+    if (rfField) rfField.hidden = kind !== 'debit' || (!existing && Boolean(counterpartSelect.value));
     amountField.hidden = kind === 'note';
     if (counterpartField && !existing) counterpartField.hidden = kind === 'note';
     updateCounterpartHint();
@@ -1038,6 +1073,27 @@ function openTxDialog(opts) {
   const amountField = h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount);
   const s = institutionStyle(account.institution);
 
+  // v0.13 ticket purchases: ring-fence a card spend (Transport envelope → Safe keeping), and notes on linked entries
+  const tset = ticketSettings(state.ledger);
+  const rfPossible = Boolean(tset && account.id === tset.cardAccountId && !(existing && existing.transferId));
+  const rfBox = h('input', { type: 'checkbox', checked: existing ? isRingFenced(state.ledger, existing.id) : false });
+  const rfField = rfPossible ? (() => {
+    const envAcc = accountById(tset.envelopeAccountId);
+    const envName = envelopeList(envAcc, { includeHidden: true }).find((e) => e.id === tset.envelopeId)?.name ?? 'envelope';
+    return h('div', { class: 'field' },
+      h('label', { class: 'check' }, rfBox, h('span', {}, 'Ring-fence it')),
+      h('div', { class: 'muted small' }, `Moves the same amount from ${envName} (${envAcc.name}) to ${accountById(tset.safeAccountId).name} on the same day; it goes back before the card is paid.`));
+  })() : null;
+  const rfShown = () => Boolean(rfField) && !rfField.hidden;
+  const rfCard = existing?.ringFenceOf ? state.ledger.transactions.find((t) => t.id === existing.ringFenceOf) : null;
+  const ticketNote = existing?.ticketId
+    ? h('div', { class: 'linked' }, `🎟 Ticket from the ticket tracker (${existing.ticketId.replace(/^p-/, 'valid from ')}). Deleting it puts the “Bought — confirm” row back.`)
+    : existing?.ringFenceOf
+      ? h('div', { class: 'linked' }, '🔒 Ring-fence for ', rfCard ? `the ${accountById(rfCard.accountId)?.name ?? 'card'} spend “${rfCard.description}” on ${longDate(rfCard.date)}` : 'a card spend that no longer exists', '. Editing that spend updates this too.')
+      : existing?.ticketReturn
+        ? h('div', { class: 'linked' }, `🔒 Ring-fenced money moved back for the ${periodLabel(existing.ticketReturn)} statement. Deleting it puts the projected entry back.`)
+        : null;
+
   const form = h('form', {
     method: 'dialog', class: 'sheet-body',
     onsubmit: (e) => {
@@ -1068,6 +1124,16 @@ function openTxDialog(opts) {
         }));
       }
       if (!next) return;
+      // v0.13 ring-fence follows the spend: added, updated, or removed
+      {
+        const id = existing ? existing.id : next.transactions.at(-1).id;
+        const wanted = rfShown() && rfBox.checked;
+        const fenced = isRingFenced(next, id);
+        next = attempt(() => (fenced
+          ? (rfShown() && !rfBox.checked ? removeRingFence(next, id) : syncRingFence(next, id))
+          : wanted ? addRingFence(next, tset, id) : next));
+        if (!next) return;
+      }
       if (existing) {
         // a reconciled entry (or its other leg) whose amount/date/etc changes gets unticked — ask first
         const unticked = state.ledger.transactions.filter((t) => isReconciled(t) && next.transactions.some((n) => n.id === t.id && !isReconciled(n)));
@@ -1089,16 +1155,19 @@ function openTxDialog(opts) {
   stmtField,
   counterpartField,
   picker.el,
+  rfField,
   recurringNote,
+  ticketNote,
   existing && isReconciled(existing) ? h('div', { class: 'linked' }, '✓ Reconciled — matched against the bank. Changing the amount or date will untick it.') : null,
   h('div', { class: 'sheet-actions' },
     existing ? h('button', {
       type: 'button', class: 'btn-danger',
       onclick: () => {
         const recNote = isReconciled(existing) || isReconciled(counterpart) ? '\n\nIt has been reconciled — the bank shows it.' : '';
-        if (!confirm((counterpart ? 'Delete this entry and its linked entry in the other account?' : 'Delete this entry?') + recNote)) return;
+        const fenced = isRingFenced(state.ledger, existing.id);
+        if (!confirm((counterpart ? 'Delete this entry and its linked entry in the other account?' : fenced ? 'Delete this entry and its ring-fence transfer?' : 'Delete this entry?') + recNote)) return;
         dlg.close();
-        commit(deleteTransaction(state.ledger, existing.id), 'Deleted');
+        commit(fenced ? removeRingFence(deleteTransaction(state.ledger, existing.id), existing.id) : deleteTransaction(state.ledger, existing.id), 'Deleted');
       },
     }, 'Delete') : h('span'),
     h('button', { type: 'submit', class: 'btn-primary' }, existing ? 'Save' : 'Add')));
@@ -1275,6 +1344,146 @@ function openOccurrenceDialog(itemId, period) {
       h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: close }, '✕')),
     h('p', { class: 'muted small rec-summary' }, `${itemAccountsText(item)} · ${itemAmountText(item)}${item.finalAmount != null && item.endDate ? ` (last ${formatPence(item.finalAmount)})` : ''} · ${describeRule(item, itemStatementCard(item))}`),
     body));
+  openDialog(dlg);
+}
+
+// ------------------------------------------------------------------ v0.13 tickets bought on the card
+
+/** The projections (tickets and money back) as of now, out to the furthest horizon. */
+function ticketViewProjections() {
+  const view = withProjections(state.ledger, horizonEnd(todayIso(), MAX_HORIZON_MONTHS + 1), state.holidays, sources());
+  return view.transactions.filter((t) => t.isProjected && (t.projection?.kind === 'ticket' || t.projection?.kind === 'ticketReturn')).map((t) => t.projection);
+}
+function dayLabel(iso) {
+  return new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** Tap on a ticket row: bought → confirm it; not bought yet → what the tracker expects. */
+function openTicketDialog(ticketId) {
+  const dlg = $('txDialog');
+  const tset = ticketSettings(state.ledger);
+  const p = tset ? ticketViewProjections().find((x) => x.kind === 'ticket' && x.ticket.id === ticketId) : null;
+  if (!p) return; // confirmed meanwhile, or the tracker's plan changed
+  const t = p.ticket;
+  const card = accountById(tset.cardAccountId);
+  const envAcc = accountById(tset.envelopeAccountId);
+  const envName = envelopeList(envAcc, { includeHidden: true }).find((e) => e.id === tset.envelopeId)?.name ?? 'envelope';
+  const safe = accountById(tset.safeAccountId);
+  const close = () => dlg.close();
+  const today = todayIso();
+
+  const head = h('header', { class: 'sheet-head', style: { '--acc': institutionStyle(card.institution).colour } },
+    swatch(card),
+    h('h2', {}, `🎟 ${TICKET_DESCRIPTION}`),
+    h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: close }, '✕'));
+  const valid = h('p', { class: 'muted small rec-summary' }, `Season ticket ${longDate(t.validFrom)} – ${longDate(t.validTo)} · ${formatPence(t.pricePence)} · from the ticket tracker`);
+
+  if (!p.bought) {
+    const line = p.overdue
+      ? h('p', { class: 'rec-status warn' }, `Overdue: the tracker expected you to buy it on ${dayLabel(t.purchaseDate)}, and it hasn’t been recorded as bought. It’s shown on today’s date until it is.`)
+      : h('p', { class: 'rec-status' }, `Forecast: buy on ${dayLabel(t.purchaseDate)} — the day before it starts.`);
+    dlg.replaceChildren(h('div', { class: 'sheet-body' }, head, valid, line,
+      h('p', { class: 'stmt-info' }, `When you’ve bought it, record the purchase in the ticket tracker. It then shows here as “Bought — confirm”, with the real date and price. (Confirming a forecast isn’t possible: its id changes once the tracker records the purchase.)`),
+      h('p', { class: 'muted small' }, `In the forecast: ${card.name} spend ${formatPence(p.amount)}, and ${formatPence(p.amount)} from ${envName} (${envAcc.name}) to ${safe.name} the same day.`),
+      h('div', { class: 'sheet-actions' },
+        h('span'),
+        sync.isEnabled() ? h('button', { type: 'button', class: 'btn-secondary', onclick: () => { close(); checkTrackerFromTap(); } }, 'Check the tracker now') : h('span'))));
+    openDialog(dlg);
+    return;
+  }
+
+  const amount = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input big', value: penceToInput(t.pricePence) });
+  const date = h('input', { type: 'date', required: true, value: t.purchaseDate });
+  // which statement — only offered near a statement date, as in the entry form
+  let stmtChoice = null;
+  let stmtShown = null;
+  const stmtSeg = h('div', { class: 'seg', role: 'radiogroup' });
+  const stmtField = h('div', { class: 'field stmt-choice', hidden: true }, h('span', {}, 'Which statement is it on?'), stmtSeg);
+  function syncStatement() {
+    stmtShown = boundaryChoice(card, date.value, state.holidays);
+    stmtField.hidden = !stmtShown;
+    if (!stmtShown) return;
+    const chosen = stmtShown.options.includes(stmtChoice) ? stmtChoice : stmtShown.byDate;
+    stmtSeg.replaceChildren(...stmtShown.options.map((m, i) => h('button', {
+      type: 'button', role: 'radio', class: 'seg-btn', 'aria-checked': String(m === chosen),
+      onclick: () => { stmtChoice = m; syncStatement(); },
+    }, `${i === 0 ? 'This' : 'Next'} · ${stmtLabel(m, card)}`)));
+  }
+  date.addEventListener('input', syncStatement);
+  date.addEventListener('change', syncStatement);
+
+  const confirmBtn = h('button', {
+    type: 'submit', class: 'btn-primary',
+    onclick: (e) => {
+      e.preventDefault();
+      const pence = parseAmount(amount.value);
+      if (pence === null) return toast('Enter an amount like 12.34', 'error');
+      if (!date.value) return toast('A valid date is required', 'error');
+      let statementMonth = null;
+      if (stmtShown) {
+        const chosen = stmtShown.options.includes(stmtChoice) ? stmtChoice : stmtShown.byDate;
+        statementMonth = chosen === statementMonthByDate(card, date.value, state.holidays) ? null : chosen;
+      }
+      const next = attempt(() => confirmTicket(state.ledger, tset, t, { date: date.value, amount: pence, statementMonth }));
+      if (!next) return;
+      close();
+      commit(next, 'Ticket confirmed');
+    },
+  }, 'Confirm');
+
+  dlg.replaceChildren(h('form', { method: 'dialog', class: 'sheet-body', onsubmit: (e) => { e.preventDefault(); confirmBtn.click(); } },
+    head, valid,
+    h('p', { class: 'rec-status rec-due' }, `Bought on ${dayLabel(t.purchaseDate)}, says the ticket tracker.`),
+    h('p', { class: 'stmt-info' }, `Confirming adds: a ${card.name} spend, and the same amount moved from ${envName} (${envAcc.name}) to ${safe.name}. It goes back to ${accountById(tset.returnAccountId).name} the day before the card is paid.`),
+    h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount),
+    h('label', { class: 'field' }, h('span', {}, 'Date bought'), date),
+    stmtField,
+    t.purchaseDate > today ? h('p', { class: 'warn small' }, 'That date is in the future.') : null,
+    h('div', { class: 'sheet-actions' }, h('span'), confirmBtn)));
+  syncStatement();
+  openDialog(dlg);
+}
+
+/** Tap on the projected "money back" before a card payment: what's in it, then confirm. */
+function openReturnDialog(month) {
+  const dlg = $('txDialog');
+  const tset = ticketSettings(state.ledger);
+  const p = tset ? ticketViewProjections().find((x) => x.kind === 'ticketReturn' && x.statementMonth === month) : null;
+  if (!p) return;
+  const card = accountById(tset.cardAccountId);
+  const safe = accountById(tset.safeAccountId);
+  const back = accountById(tset.returnAccountId);
+  const close = () => dlg.close();
+  const amount = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input big', value: penceToInput(p.amount) });
+  const date = h('input', { type: 'date', required: true, value: p.date });
+  const confirmBtn = h('button', {
+    type: 'submit', class: 'btn-primary',
+    onclick: (e) => {
+      e.preventDefault();
+      const pence = parseAmount(amount.value);
+      if (pence === null) return toast('Enter an amount like 12.34', 'error');
+      if (!date.value) return toast('A valid date is required', 'error');
+      const next = attempt(() => confirmReturn(state.ledger, tset, month, { date: date.value, amount: pence, description: p.description }));
+      if (!next) return;
+      close();
+      commit(next, 'Confirmed');
+    },
+  }, 'Confirm');
+  const stDate = statementDate(card, month, state.holidays);
+  dlg.replaceChildren(h('form', { method: 'dialog', class: 'sheet-body', onsubmit: (e) => { e.preventDefault(); confirmBtn.click(); } },
+    h('header', { class: 'sheet-head', style: { '--acc': institutionStyle(safe.institution).colour } },
+      swatch(safe),
+      h('h2', {}, '🔒 Ring-fenced money back'),
+      h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: close }, '✕')),
+    h('p', { class: 'muted small rec-summary' }, `${safe.name} → ${back.name} · the day before the ${card.name} payment on ${dayLabel(p.dueDate)}`),
+    h('p', { class: `rec-status ${p.date <= todayIso() ? 'rec-due' : ''}` }, `For the ${longDate(stDate)} statement — everything ring-fenced on it:`),
+    h('ul', { class: 'ticket-spends' }, p.spends.map((t) => h('li', {},
+      h('span', {}, `${shortDate(t.date)} · ${t.description}${t.isProjected ? ' (projected)' : ''}`),
+      h('span', {}, formatPence(t.amount))))),
+    h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount),
+    h('label', { class: 'field' }, h('span', {}, 'Date'), date),
+    h('p', { class: 'muted small' }, 'Confirm once you’ve moved it — change the amount first if you moved a different figure (e.g. something ring-fenced by hand before you switched this on).'),
+    h('div', { class: 'sheet-actions' }, h('span'), confirmBtn)));
   openDialog(dlg);
 }
 
@@ -2049,7 +2258,7 @@ function renderEnvelopeDialog() {
   for (const { transaction: t, change, balance } of hist.rows) {
     const p = t.isProjected ? t.projection : null;
     const move = isEnvelopeMove(t);
-    const open = () => (p ? openOccurrenceDialog(p.itemId, p.period) : move ? openMoveDialog({ txId: t.id }) : openTxDialog({ txId: t.id }));
+    const open = () => (p ? openProjection(p) : move ? openMoveDialog({ txId: t.id }) : openTxDialog({ txId: t.id }));
     const split = !move && t.envelopeSplits?.length > 1 ? ` (part of ${formatPence(t.amount)})` : '';
     list.append(h('li', {}, h('button', {
       type: 'button', class: `env-hist-row ${t.date > today ? 'future' : ''} ${p ? 'projected' : ''} ${p?.skipped ? 'skipped' : ''}`,
@@ -2308,6 +2517,60 @@ function openAccountDialog(accountId) {
 
 // ------------------------------------------------------------------ settings / backup
 
+/**
+ * v0.13 ⚙ Ticket purchases: which card, envelope, ring-fence account and
+ * return account; and the day to start from (the day it's switched on, unless changed).
+ */
+function ticketSection() {
+  const l = state.ledger;
+  const rec = ticketSettingsRecord(l);
+  const cards = l.accounts.filter((a) => a.type === 'credit' && statementConfig(a));
+  const envOptions = l.accounts.filter((a) => envelopeConfig(a)).flatMap((a) => envelopeList(a).map((e) => ({ value: `${a.id}|${e.id}`, label: `${e.name} · ${a.name}`, name: e.name })));
+  const plain = l.accounts.filter((a) => a.type !== 'credit' && a.active);
+  const intro = h('p', { class: 'muted small' }, 'Puts each ticket the ticket tracker says you’ve bought — or will buy — on the card on its purchase day, with the same amount ring-fenced from your envelope, and moved back the day before the card is paid.');
+  if (!cards.length || !envOptions.length || plain.length < 2) {
+    return h('section', { class: 'settings-section', id: 'ticketSection' }, h('h3', {}, 'Ticket purchases'), intro,
+      h('p', { class: 'muted small' }, 'Needs a credit card with its statement date set, an account with envelopes, and two other accounts (Safe keeping and your current account).'));
+  }
+  const pick = (list, re) => list.find((a) => re.test(a.name))?.id ?? list[0]?.id ?? '';
+  const select = (list, value) => h('select', {}, list.map((a) => h('option', { value: a.id, selected: a.id === value }, a.name)));
+  const on = h('input', { type: 'checkbox', checked: Boolean(rec?.enabled) });
+  const card = select(cards, rec?.cardAccountId ?? pick(cards, /barclay/i));
+  const envValue = rec ? `${rec.envelopeAccountId}|${rec.envelopeId}` : envOptions.find((o) => /transport/i.test(o.name))?.value ?? envOptions[0].value;
+  const env = h('select', {}, envOptions.map((o) => h('option', { value: o.value, selected: o.value === envValue }, o.label)));
+  const safe = select(plain, rec?.safeAccountId ?? pick(plain, /safe/i));
+  const back = select(plain, rec?.returnAccountId ?? (plain.find((a) => a.type === 'current')?.id ?? plain[0].id));
+  const start = h('input', { type: 'date', value: rec?.startDate ?? todayIso() });
+  const fields = h('div', { hidden: !on.checked },
+    h('label', { class: 'field' }, h('span', {}, 'Card the tickets go on'), card),
+    h('label', { class: 'field' }, h('span', {}, 'Ring-fenced from (envelope)'), env),
+    h('label', { class: 'field' }, h('span', {}, 'Ring-fence account'), safe),
+    h('label', { class: 'field' }, h('span', {}, 'Money goes back to'), back),
+    h('label', { class: 'field' }, h('span', {}, 'Start from'), start,
+      h('div', { class: 'muted small' }, 'Tickets bought before this day are left out — enter those by hand. It’s the day you switch this on unless you change it.')));
+  on.addEventListener('change', () => { fields.hidden = !on.checked; if (on.checked && !rec?.startDate) start.value = todayIso(); });
+  const problem = rec?.enabled ? ticketSettingsProblem(l, rec) : null;
+  const save = () => {
+    const [envelopeAccountId, envelopeId] = env.value.split('|');
+    const next = attempt(() => setTicketSettings(state.ledger, {
+      enabled: on.checked, cardAccountId: card.value, envelopeAccountId, envelopeId, safeAccountId: safe.value, returnAccountId: back.value, startDate: start.value,
+    }));
+    if (!next) return;
+    const turnedOn = on.checked && !rec?.enabled;
+    const saved = commit(next, on.checked ? 'Ticket purchases saved' : 'Ticket purchases off'); // sets state.ledger straight away
+    // read the tracker's file now — started synchronously from the tap, so Google's sign-in window is allowed (Android rule)
+    if (turnedOn && sync.isEnabled()) checkTrackerFromTap();
+    saved.then(() => { if ($('settingsDialog').open) renderSettings(); });
+  };
+  return h('section', { class: 'settings-section', id: 'ticketSection' },
+    h('h3', {}, 'Ticket purchases'), intro,
+    h('label', { class: 'check' }, on, h('span', {}, 'Show ticket purchases from the ticket tracker')),
+    problem ? h('p', { class: 'small warn' }, `Not working: ${problem}`) : null,
+    fields,
+    !sync.isEnabled() && on.checked ? h('p', { class: 'small warn' }, 'Needs Google Drive sync on — the tickets are read from your Drive.') : null,
+    h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn-primary', id: 'ticketSave', onclick: save }, 'Save')));
+}
+
 function renderSettings() {
   const dlg = $('settingsDialog');
   const l = state.ledger;
@@ -2374,10 +2637,14 @@ function renderSettings() {
       h('h3', {}, 'Ticket tracker'),
       h('p', { class: 'small' }, (() => {
         const items = recurringItems(l).filter((i) => i.amountFrom === TRACKER_SOURCE).map((i) => i.description);
-        return `${items.join(', ')} take${items.length === 1 ? 's' : ''} ${items.length === 1 ? 'its' : 'their'} amount from the ticket tracker.`;
+        const amounts = items.length ? `${items.join(', ')} take${items.length === 1 ? 's' : ''} ${items.length === 1 ? 'its' : 'their'} amount from the ticket tracker.` : '';
+        return [amounts, ticketSettingsRecord(l)?.enabled ? 'Ticket purchases come from it too.' : ''].filter(Boolean).join(' ');
       })()),
       h('p', { class: `small ${state.tracker?.error ? 'warn' : 'muted'}`, id: 'trackerStatusLine' }, trackerStatusText()),
+      state.tracker?.estimates?.ticketsError ? h('p', { class: 'small warn' }, state.tracker.estimates.ticketsError) : null,
       st.enabled ? h('button', { type: 'button', class: 'btn-secondary', onclick: checkTrackerFromTap }, 'Check now') : null) : null,
+
+    ticketSection(),
 
     h('section', { class: 'settings-section' },
       h('h3', {}, st.enabled ? 'Backup file' : 'Move data between devices'),

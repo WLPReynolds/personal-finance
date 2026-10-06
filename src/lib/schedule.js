@@ -28,6 +28,7 @@ import { daysInMonth, shiftToWorkingDay } from './workdays.js';
 import { statementConfig, paymentDueDate, statementFor, addMonths as addStatementMonths } from './statements.js';
 import { TRACKER_SOURCE, trackerPeriodFor } from './tracker-estimates.js';
 import { envelopeConfig, validateSplits, fitSplits } from './envelopes.js';
+import { ticketSettings, ticketProjections, ticketLegs, returnProjections, returnLegs } from './tickets.js';
 
 export const MAX_HORIZON_MONTHS = 12;
 /** "Every N days" bounds. 31 is the smallest gap that can never land twice in one month (see above). */
@@ -295,6 +296,10 @@ export const numberLabel = (no) => (no ? `(${no.n} of ${no.of})` : '');
  * figures (tracker-estimates.js), for items with amountFrom 'ticket-tracker'.
  * Such a projection carries amountSource 'tracker' (+ tracker: the period) or
  * 'fallback' (no figure for that month — the item's own amount).
+ * v0.13: sources.today (YYYY-MM-DD) + ticket purchases switched on (tickets.js)
+ * → also ticket projections (kind 'ticket', before the statement payments so
+ * those include them) and the money moved back before each card payment
+ * (kind 'ticketReturn', last). Neither has an itemId.
  *
  * @returns {Array<{ key: string, itemId: string, period: string, date: string, seriesDate: string,
  *   amount: number, description: string, kind: string, accountId: string, toAccountId: string|null,
@@ -354,6 +359,10 @@ export function projections(ledger, toIso, holidays, sources = {}) {
     }
   }
 
+  // 1b. v0.13 tickets bought on the card (from the tracker's file)
+  const ticketCfg = ticketSettings(ledger);
+  if (ticketCfg && sources.today) out.push(...ticketProjections(ledger, ticketCfg, sources.tracker, sources.today, toIso));
+
   // 2. statement payments, oldest first: each statement's balance counts
   // everything projected before it, including earlier statement payments
   // (and anything paid less, or skipped, carries on to the next statement)
@@ -374,11 +383,18 @@ export function projections(ledger, toIso, holidays, sources = {}) {
       projected.push(p);
     }
   }
+  // 3. v0.13 ring-fenced money back before each card payment (counts projected tickets too)
+  if (ticketCfg) {
+    const view = { ...ledger, transactions: [...ledger.transactions, ...out.flatMap(projectionLegs)] };
+    out.push(...returnProjections(view, ticketCfg, holidays, toIso));
+  }
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /** One projection as transaction-shaped legs (two for a transfer), marked isProjected. */
 function projectionLegs(p) {
+  if (p.kind === 'ticket') return ticketLegs(p);
+  if (p.kind === 'ticketReturn') return returnLegs(p);
   const base = {
     category: null,
     kind: 'transaction',
