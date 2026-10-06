@@ -1,14 +1,42 @@
-# Finance Tracker
+# Personal Finance
 
 Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadsheets.
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.8.0 — Reconciling; every N days; card statements
+## Status: v0.9.0 — Automatic backups; Expired recurring items
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**New in v0.9.0 — automatic backups**
+- With Drive sync on, once a day — just before that day's first save to Drive —
+  Drive copies `personal.json` into `My Drive/Finance/backups/` as
+  `personal-YYYY-MM-DD.json`. So each backup is the data as it stood BEFORE that
+  day's changes. Whichever device saves first that day makes it; Drive does the
+  copy itself (nothing downloaded). Days with no changes get no backup.
+- Kept: the **30 most recent** daily backups, plus the **first backup of each
+  month for 12 months**. Older ones are deleted when the next backup is made.
+- **⚙ → Automatic backups → Backups…** lists them (newest first, the monthly
+  ones tagged). Pick one to compare it with now — each account's balance today
+  and the number of entries, differences in bold — then **Restore this backup**.
+- Restoring first syncs, then saves a copy of the current data as
+  `personal-YYYY-MM-DD-before-restore-HHMM.json` (kept 30 days, listed at the
+  top, so a restore can itself be undone), then replaces the data here and on
+  Drive. The other device follows on its next sync; anything it hadn't synced
+  yet is merged back on top. If the safety copy can't be made, nothing is restored.
+- A backup problem never stops a sync: ⚙ shows it, and it's retried with the
+  next change. Manual export/import is still there.
+
+**Also new in v0.9.0**
+- Header reads **Personal Finance**, with the running version underneath. The
+  TEST badge is gone; ⚙'s "Test data" section is now **This device** (entry count
+  and *Erase all data on this device*).
+- **Recurring items:** an item with an end date moves to an **Expired** section
+  at the bottom once its last payment is confirmed (or skipped). An item whose
+  end date has passed but whose last payment isn't confirmed stays in the main
+  list, marked "last payment not confirmed yet".
 
 **New in v0.8.0 — reconciling**
 - **Reconcile** any account: the **✓** button in a grid column header, or

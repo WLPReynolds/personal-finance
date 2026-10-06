@@ -17,11 +17,11 @@ export function createFakeDrive() {
     authFail,
     calls: [],
     async folderExists(token, id) { check(); const f = items.get(id); return Boolean(f && f.folder && !f.trashed); },
-    async findOrCreateFolder(token, name) {
+    async findOrCreateFolder(token, name, parentId = 'root') {
       check();
-      for (const f of items.values()) if (f.folder && f.name === name && !f.trashed) return f.id;
+      for (const f of items.values()) if (f.folder && f.name === name && (f.parent ?? 'root') === parentId && !f.trashed) return f.id;
       const id = `folder${nextId++}`;
-      items.set(id, { id, name, folder: true, trashed: false });
+      items.set(id, { id, name, parent: parentId, folder: true, trashed: false });
       return id;
     },
     async getMeta(token, id) {
@@ -51,9 +51,26 @@ export function createFakeDrive() {
       this.calls.push('update');
       return { id, version: String(f.version) };
     },
+    async listFiles(token, folderId) {
+      check();
+      return [...items.values()].filter((f) => !f.folder && !f.trashed && f.parent === folderId)
+        .map((f) => ({ id: f.id, name: f.name, createdTime: f.createdTime ?? '' }));
+    },
+    async copyFile(token, id, folderId, name) {
+      check();
+      if (hooks.failCopy) throw new Error('copy refused');
+      const src = items.get(id);
+      const nid = `file${nextId++}`;
+      items.set(nid, { id: nid, name, parent: folderId, folder: false, text: src.text, version: 1, trashed: false, createdTime: `t${String(nextId).padStart(6, '0')}` });
+      this.calls.push('copy');
+      return { id: nid };
+    },
+    async deleteFile(token, id) { check(); items.delete(id); this.calls.push('delete'); },
     async whoAmI() { check(); return 'wayne@example.com'; },
     // test helpers
-    fileText() { for (const f of items.values()) if (!f.folder && !f.trashed) return f.text; return null; },
+    fileText() { for (const f of items.values()) if (!f.folder && !f.trashed && f.name === 'personal.json') return f.text; return null; },
+    backups() { const bf = [...items.values()].find((f) => f.folder && f.name === 'backups'); return bf ? [...items.values()].filter((f) => !f.folder && f.parent === bf.id).map((f) => f.name).sort() : []; },
+    backupText(name) { return [...items.values()].find((f) => !f.folder && f.name === name)?.text ?? null; },
     trashAll() { for (const f of items.values()) f.trashed = true; },
   };
 }

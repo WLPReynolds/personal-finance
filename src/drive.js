@@ -40,8 +40,9 @@ export const googleDrive = {
     return !f.trashed && f.mimeType === FOLDER_MIME;
   },
 
-  async findOrCreateFolder(token, name) {
-    const query = `mimeType=${lit(FOLDER_MIME)} and name=${lit(name)} and trashed=false and 'root' in parents`;
+  /** Folder `name` inside parentId (default: the top of My Drive), created if missing. */
+  async findOrCreateFolder(token, name, parentId = 'root') {
+    const query = `mimeType=${lit(FOLDER_MIME)} and name=${lit(name)} and trashed=false and ${lit(parentId)} in parents`;
     const found = await call(token, `${API}/files?q=${q(query)}&fields=files(id)&spaces=drive`);
     if (!found.ok) throw await failed(found, 'folder search');
     const files = (await found.json()).files ?? [];
@@ -49,7 +50,7 @@ export const googleDrive = {
     const created = await call(token, `${API}/files?fields=id`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, mimeType: FOLDER_MIME }),
+      body: JSON.stringify(parentId === 'root' ? { name, mimeType: FOLDER_MIME } : { name, mimeType: FOLDER_MIME, parents: [parentId] }),
     });
     if (!created.ok) throw await failed(created, 'folder create');
     return (await created.json()).id;
@@ -103,6 +104,38 @@ export const googleDrive = {
     if (!resp.ok) throw await failed(resp, 'save');
     const f = await resp.json();
     return { id: f.id, version: String(f.version) };
+  },
+
+  /** v0.9 backups: files directly inside a folder → [{ id, name, createdTime, size }]. */
+  async listFiles(token, folderId) {
+    const query = `${lit(folderId)} in parents and trashed=false`;
+    const out = [];
+    let pageToken = '';
+    do {
+      const resp = await call(token, `${API}/files?q=${q(query)}&fields=nextPageToken,files(id,name,createdTime,size)&pageSize=1000&spaces=drive${pageToken ? `&pageToken=${q(pageToken)}` : ''}`);
+      if (!resp.ok) throw await failed(resp, 'backup list');
+      const body = await resp.json();
+      out.push(...(body.files ?? []));
+      pageToken = body.nextPageToken ?? '';
+    } while (pageToken);
+    return out;
+  },
+
+  /** Drive copies the file itself — nothing is downloaded. → { id } */
+  async copyFile(token, id, folderId, name) {
+    const resp = await call(token, `${API}/files/${id}/copy?fields=id`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, parents: [folderId] }),
+    });
+    if (!resp.ok) throw await failed(resp, 'backup copy');
+    return { id: (await resp.json()).id };
+  },
+
+  /** Permanently removes one of the app's own files (old backups). */
+  async deleteFile(token, id) {
+    const resp = await call(token, `${API}/files/${id}`, { method: 'DELETE' });
+    if (!resp.ok && resp.status !== 404) throw await failed(resp, 'backup delete');
   },
 
   /** Signed-in account's email (used only to skip the account picker next time). */

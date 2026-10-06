@@ -364,6 +364,21 @@ function projectionLegs(p) {
  * Skipped entries carry `skipped: true` and add nothing to balances.
  * Never save this object.
  */
+/**
+ * v0.9: has a fixed-end series been paid off? True when the item has an end
+ * date and no payment is left that is neither confirmed nor skipped (overdue
+ * unconfirmed ones count as still to pay). Open-ended items never finish.
+ * Looks 62 days past the end date so a last payment moved a little later by a
+ * one-off date still counts as outstanding.
+ */
+export function seriesFinished(ledger, item, holidays) {
+  if (!item?.endDate) return false;
+  const d = new Date(`${item.endDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 62);
+  const to = d.toISOString().slice(0, 10);
+  return !projections(ledger, to, holidays).some((p) => p.itemId === item.id && !p.skipped);
+}
+
 export function withProjections(ledger, toIso, holidays) {
   const accountIds = new Set(ledger.accounts.map((a) => a.id));
   const legs = projections(ledger, toIso, holidays)

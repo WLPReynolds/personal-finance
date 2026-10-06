@@ -23,7 +23,7 @@ import {
 import {
   MAX_HORIZON_MONTHS, horizonEnd, withProjections, recurringItems,
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
-  upcomingDates, describeRule, MIN_EVERY_DAYS, MAX_EVERY_DAYS, itemNumbering, seriesAmount, numberLabel, statementCardFor,
+  upcomingDates, describeRule, MIN_EVERY_DAYS, MAX_EVERY_DAYS, itemNumbering, seriesAmount, numberLabel, statementCardFor, seriesFinished,
 } from './lib/schedule.js';
 import {
   DEFAULT_PAYMENT_DAYS, statementConfig, statementDate, paymentDueDate, statementFor, statementMonthByDate,
@@ -33,7 +33,7 @@ import {
   isReconciled, setReconciled, reconcileScope, reconcileDifference, defaultPeriod, reconcilesByStatement,
 } from './lib/reconcile.js';
 
-export const APP_VERSION = '0.8.0';
+export const APP_VERSION = '0.9.0';
 
 const state = {
   ledger: null,
@@ -1231,22 +1231,41 @@ function openStatementDialog(cardId, month) {
 function renderRecurringManager() {
   const dlg = $('recurringDialog');
   const today = todayIso();
-  const items = recurringItems(state.ledger)
-    .map((item) => ({ item, next: upcomingDates(item, today, 1, state.holidays, itemStatementCard(item))[0] ?? null }))
+  const all = recurringItems(state.ledger).map((item) => ({
+    item,
+    next: upcomingDates(item, today, 1, state.holidays, itemStatementCard(item))[0] ?? null,
+    finished: seriesFinished(state.ledger, item, state.holidays),
+  }));
+  const active = all.filter((x) => !x.finished)
     .sort((a, b) => (a.next ?? '9999').localeCompare(b.next ?? '9999') || a.item.description.localeCompare(b.item.description));
+  // v0.9: a series with an end date whose last payment is confirmed (or skipped) moves to "Expired", latest end first
+  const expired = all.filter((x) => x.finished)
+    .sort((a, b) => b.item.endDate.localeCompare(a.item.endDate) || a.item.description.localeCompare(b.item.description));
 
-  const list = items.length
-    ? h('ul', { class: 'rec-list' }, items.map(({ item, next }) => {
-        const acc = accountById(item.accountId);
-        const ended = !next;
-        return h('li', {}, h('button', { type: 'button', class: `rec-row ${ended ? 'rec-ended' : ''}`, onclick: () => openRecurringEditor(item.id) },
-          acc ? swatch(acc) : null,
-          h('span', { class: 'rec-main' },
-            h('span', { class: 'rec-name' }, item.description),
-            h('span', { class: 'muted small' }, `${describeRule(item, itemStatementCard(item))} · ${itemAccountsText(item)}`),
-            h('span', { class: 'small' }, ended ? `Ended${item.endDate ? ` ${longDate(item.endDate)}` : ''}` : `Next: ${longDate(next)}${nextNumberText(item)}`)),
-          h('span', { class: `rec-amt ${item.kind === 'in' ? 'credit' : ''}` }, itemStatementCard(item) ? 'statement' : signedAmount(item.kind, item.amount))));
-      }))
+  const lastPaid = (item) => state.ledger.transactions
+    .filter((t) => t.scheduledItemId === item.id)
+    .reduce((max, t) => (t.date > max ? t.date : max), '');
+  const row = ({ item, next, finished }) => {
+    const acc = accountById(item.accountId);
+    const paid = finished ? lastPaid(item) : '';
+    const status = finished
+      ? (paid ? `Finished · last payment ${longDate(paid)}` : `Finished · ended ${longDate(item.endDate)}`)
+      : next ? `Next: ${longDate(next)}${nextNumberText(item)}`
+        : `Ended${item.endDate ? ` ${longDate(item.endDate)}` : ''} · last payment not confirmed yet`;
+    return h('li', {}, h('button', { type: 'button', class: `rec-row ${finished ? 'rec-ended' : ''}`, onclick: () => openRecurringEditor(item.id) },
+      acc ? swatch(acc) : null,
+      h('span', { class: 'rec-main' },
+        h('span', { class: 'rec-name' }, item.description),
+        h('span', { class: 'muted small' }, `${describeRule(item, itemStatementCard(item))} · ${itemAccountsText(item)}`),
+        h('span', { class: 'small' }, status)),
+      h('span', { class: `rec-amt ${item.kind === 'in' ? 'credit' : ''}` }, itemStatementCard(item) ? 'statement' : signedAmount(item.kind, item.amount))));
+  };
+
+  const list = all.length
+    ? h('div', {},
+        active.length ? h('ul', { class: 'rec-list rec-active' }, active.map(row)) : h('p', { class: 'muted small' }, 'Nothing still running.'),
+        expired.length ? h('h3', { class: 'rec-section-head' }, `Expired (${expired.length})`) : null,
+        expired.length ? h('ul', { class: 'rec-list rec-expired' }, expired.map(row)) : null)
     : h('p', { class: 'muted' }, 'None yet. Add salary, direct debits, subscriptions and card payments here — they then appear ahead of time in your accounts, ready to confirm.');
 
   dlg.replaceChildren(h('div', { class: 'sheet-body' },
@@ -1256,7 +1275,7 @@ function renderRecurringManager() {
         h('button', { type: 'button', class: 'btn-primary btn-small rec-add-top', onclick: () => openRecurringEditor(null) }, '+ Add'),
         h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕'))),
     list,
-    items.length ? h('button', { type: 'button', class: 'btn-primary', onclick: () => openRecurringEditor(null) }, '+ Add recurring item') : null,
+    all.length ? h('button', { type: 'button', class: 'btn-primary', onclick: () => openRecurringEditor(null) }, '+ Add recurring item') : null,
     h('p', { class: 'muted small' }, holidayStatusText())));
 }
 
@@ -1772,6 +1791,8 @@ function renderSettings() {
 
     driveSection,
 
+    backupsSection(st),
+
     h('section', { class: 'settings-section' },
       h('h3', {}, st.enabled ? 'Backup file' : 'Move data between devices'),
       h('p', { class: 'muted small' }, st.enabled
@@ -1804,7 +1825,7 @@ function renderSettings() {
       viewChoice),
 
     h('section', { class: 'settings-section' },
-      h('h3', {}, 'Test data'),
+      h('h3', {}, 'This device'),
       h('p', { class: 'muted small' }, `${l.transactions.length} entries across ${l.accounts.length} accounts on this device.`),
       h('button', {
         type: 'button', class: 'btn-danger',
@@ -1824,7 +1845,123 @@ function renderSettings() {
         },
       }, 'Erase all data on this device')),
 
-    h('p', { class: 'muted small center' }, `Finance Tracker v${APP_VERSION} · ${state.meta.persisted ? 'storage protected' : 'storage may be cleared by the browser — keep exports'}`)));
+    h('p', { class: 'muted small center' }, `Personal Finance v${APP_VERSION} · ${state.meta.persisted ? 'storage protected' : 'storage may be cleared by the browser — keep exports'}`)));
+}
+
+// ------------------------------------------------------------------ automatic backups (v0.9)
+
+function backupsSection(st) {
+  if (!st.enabled) {
+    return h('section', { class: 'settings-section' },
+      h('h3', {}, 'Automatic backups'),
+      h('p', { class: 'muted small' }, 'Need Google Drive sync turned on (above). Until then, use Download export below to keep a copy.'));
+  }
+  return h('section', { class: 'settings-section backups-section' },
+    h('h3', {}, 'Automatic backups'),
+    h('p', { class: 'muted small' }, `Once a day, just before the first change is saved, Drive keeps a copy in My Drive/${st.location.split('/')[0]}/backups. Kept: the last 30, plus the first of each month for a year.`),
+    st.backupError
+      ? h('p', { class: 'warn small' }, `Last backup didn’t work: ${st.backupError}. It tries again with the next change.`)
+      : h('p', { class: 'muted small' }, `Last backup: ${when(st.lastBackupAt)}${st.lastBackupAt ? '' : ' — the first is made with your next change'}`),
+    h('button', { type: 'button', class: 'btn-secondary', onclick: openBackupsDialog }, 'Backups…'));
+}
+
+function backupDayLabel(b) {
+  const d = longDate(b.info.day);
+  return b.info.kind === 'before-restore' ? `${d}, ${b.info.time}` : d;
+}
+
+/** Must be called straight from a tap: listing may need Google's sign-in window. */
+function openBackupsDialog() {
+  const dlg = $('backupsDialog');
+  const listing = sync.listBackups(); // starts the sign-in synchronously (Android)
+  const close = h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕');
+  const head = (title, back) => h('header', { class: 'sheet-head' },
+    back ? h('button', { type: 'button', class: 'btn-ghost', onclick: back }, '‹ Back') : null,
+    h('h2', {}, title), close);
+  const show = (...children) => dlg.replaceChildren(h('div', { class: 'sheet-body' }, ...children));
+
+  let backups = [];
+  function drawList() {
+    const intro = h('p', { class: 'muted small' }, 'Each backup is your data as it was just before that day’s first change. Pick one to see what’s in it before restoring.');
+    if (!backups.length) {
+      show(head('Backups'), intro, h('p', { class: 'muted' }, 'No backups yet. The first is made the next time a change is saved to Drive.'));
+      return;
+    }
+    show(head('Backups'), intro,
+      h('ul', { class: 'rec-list backup-list' }, backups.map((b) => h('li', {}, h('button', {
+        type: 'button', class: 'rec-row', onclick: () => openBackup(b),
+      }, h('span', { class: 'rec-main' },
+        h('span', { class: 'rec-name' }, backupDayLabel(b),
+          b.info.kind === 'before-restore' ? h('span', { class: 'backup-tag' }, 'before a restore') : null,
+          b.monthly ? h('span', { class: 'backup-tag' }, 'monthly') : null)))))));
+  }
+
+  async function openBackup(b) {
+    show(head(backupDayLabel(b), drawList), h('p', { class: 'muted' }, 'Opening…'));
+    let parsed;
+    try {
+      parsed = await sync.readBackup(b.id);
+    } catch (err) {
+      show(head(backupDayLabel(b), drawList), h('p', { class: 'warn' }, err.message));
+      return;
+    }
+    const backup = parsed.ledger;
+    const today = todayIso();
+    const ids = [...new Set([...state.ledger.accounts, ...backup.accounts].map((a) => a.id))];
+    const rows = ids.map((id) => {
+      const nowAcc = state.ledger.accounts.find((a) => a.id === id);
+      const oldAcc = backup.accounts.find((a) => a.id === id);
+      const acc = nowAcc ?? oldAcc;
+      const then = oldAcc ? balanceAsOf(backup, oldAcc, today) : null;
+      const now = nowAcc ? balanceAsOf(state.ledger, nowAcc, today) : null;
+      return h('tr', { class: then !== now ? 'differs' : '' },
+        h('td', {}, acc.name),
+        h('td', {}, then === null ? '—' : formatPence(then)),
+        h('td', {}, now === null ? '—' : formatPence(now)));
+    });
+    const nThen = backup.transactions.length;
+    const nNow = state.ledger.transactions.length;
+    const what = b.info.kind === 'before-restore'
+      ? 'Your data as it was just before a restore.'
+      : 'Your data as it was just before this day’s first change.';
+    show(head(backupDayLabel(b), drawList),
+      h('p', { class: 'small' }, what),
+      h('div', { class: 'recon-summary' },
+        h('table', { class: 'backup-compare' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'Balance today'), h('th', {}, 'In backup'), h('th', {}, 'Now'))),
+          h('tbody', {}, rows,
+            h('tr', { class: nThen !== nNow ? 'differs' : '' }, h('td', {}, 'Entries'), h('td', {}, String(nThen)), h('td', {}, String(nNow))))),
+        h('p', { class: 'muted small' }, 'Bold rows differ. “Balance today” counts entries up to today in each copy.')),
+      h('div', { class: 'btn-row' },
+        h('button', { type: 'button', class: 'btn-secondary', onclick: drawList }, 'Back'),
+        h('button', { type: 'button', class: 'btn-danger', onclick: () => restore(b, backup) }, 'Restore this backup')));
+  }
+
+  async function restore(b, backup) {
+    const ok = confirm(
+      `Restore the backup from ${backupDayLabel(b)}?\n\n` +
+      'Everything goes back to how it was then, on this device and on Drive; your other device follows on its next sync. ' +
+      'A copy of your data as it is now is saved first, so you can undo this from the same list.\n\n' +
+      'If your other device has changes it hasn’t synced yet, those will be added back on top when it next syncs.');
+    if (!ok) return;
+    show(head('Restoring…'), h('p', { class: 'muted' }, 'Saving a copy of your current data, then restoring…'));
+    const r = await sync.restoreBackup(backup);
+    if (r.status === 'restored') {
+      dlg.close();
+      if ($('settingsDialog').open) renderSettings();
+      toast(r.pending ? 'Restored here — it reaches Drive on the next sync' : `Restored the backup from ${backupDayLabel(b)}`);
+      if (r.conflicts) openConflictDialog();
+      return;
+    }
+    const msg = r.status === 'needs-tap' ? 'Google sign-in has expired. Tap the cloud button at the top, then try again.' : (r.reason ?? 'Restore failed');
+    show(head(backupDayLabel(b), drawList), h('p', { class: 'warn' }, `Nothing was restored. ${msg}`),
+      h('button', { type: 'button', class: 'btn-secondary', onclick: drawList }, 'Back to the list'));
+  }
+
+  show(head('Backups'), h('p', { class: 'muted' }, 'Looking on Google Drive…'));
+  openDialog(dlg);
+  listing.then((list) => { backups = list; drawList(); })
+    .catch((err) => show(head('Backups'), h('p', { class: 'warn' }, err.message)));
 }
 
 function downloadBlob(file, name) {
@@ -1938,6 +2075,7 @@ $('installBtn').addEventListener('click', async () => {
 });
 
 async function start() {
+  $('brandVersion').textContent = `v${APP_VERSION}`;
   try {
     state.ledger = (await loadLedger()) ?? emptyLedger();
     state.meta = await loadMeta();

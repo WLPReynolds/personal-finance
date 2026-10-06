@@ -42,21 +42,35 @@ def handle(route, request):
         if qs.get('alt') == ['media']:
             return route.fulfill(status=200, body=f['text'], content_type='application/json')
         return js({'id': m.group(1), 'trashed': f['trashed'], 'mimeType': f['mime'], 'version': str(f['version'])})
+    if m and request.method == 'DELETE':  # v0.9: pruning old backups
+        if m.group(1) not in drive: return js({'error': {'message': 'not found'}}, 404)
+        del drive[m.group(1)]
+        return route.fulfill(status=204, body='')
+    m2 = re.fullmatch(r'/drive/v3/files/([^/]+)/copy', path)
+    if m2 and request.method == 'POST':  # v0.9: daily backup = server-side copy
+        src = drive[m2.group(1)]; meta = json.loads(request.post_data)
+        fid = f'f{next(ids)}'
+        drive[fid] = dict(name=meta['name'], parent=meta['parents'][0], folder=False, text=src['text'], version=1, trashed=False, mime=src['mime'], created=f'{next(ids):08d}')
+        return js({'id': fid})
     if path == '/drive/v3/files' and request.method == 'GET':
         q = qs['q'][0]
         res = []
         for fid, f in drive.items():
             if f['trashed']: continue
+            in_parent = f"'{f['parent'] or 'root'}' in parents" in q
             if "mimeType='application/vnd.google-apps.folder'" in q:
-                if f['folder'] and f"name='{f['name']}'" in q: res.append({'id': fid})
+                if f['folder'] and f"name='{f['name']}'" in q and in_parent: res.append({'id': fid})
+            elif "name=" not in q:  # v0.9: list a folder (backups)
+                if not f['folder'] and in_parent:
+                    res.append({'id': fid, 'name': f['name'], 'createdTime': f.get('created', '')})
             else:
-                if not f['folder'] and f"'{f['parent']}' in parents" in q and f"name='{f['name']}'" in q:
+                if not f['folder'] and in_parent and f"name='{f['name']}'" in q:
                     res.append({'id': fid, 'version': str(f['version'])})
         return js({'files': res})
     if path == '/drive/v3/files' and request.method == 'POST':
         meta = json.loads(request.post_data)
         fid = f'f{next(ids)}'
-        drive[fid] = dict(name=meta['name'], parent=None, folder=True, text=None, version=1, trashed=False, mime=meta['mimeType'])
+        drive[fid] = dict(name=meta['name'], parent=(meta.get('parents') or [None])[0], folder=True, text=None, version=1, trashed=False, mime=meta['mimeType'])
         return js({'id': fid})
     if path == '/upload/drive/v3/files' and request.method == 'POST':
         assert qs['uploadType'] == ['multipart']
@@ -96,7 +110,12 @@ window.__FT_TEST__ = { auth: (() => {
 
 
 def drive_files():
-    return [f for f in drive.values() if not f['folder'] and not f['trashed']]
+    """The synced data file(s) — backups (v0.9) are left out."""
+    return [f for f in drive.values() if not f['folder'] and not f['trashed'] and f['name'] == 'personal.json']
+
+def backup_names():
+    folder = [k for k, f in drive.items() if f['folder'] and f['name'] == 'backups']
+    return sorted(f['name'] for f in drive.values() if not f['folder'] and f['parent'] in folder)
 
 # ---------------------------------------------------------------- fake sign-in
 # FAKE_AUTH replaces the whole auth module via window.__FT_TEST__ (used by the

@@ -71,11 +71,9 @@ button, input, select { font: inherit; color: inherit; }
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
-.brand { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
-.badge-test {
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
-  background: var(--warn-bg); color: var(--warn-text); padding: 2px 6px; border-radius: 6px; vertical-align: 2px;
-}
+.brand-block { display: grid; line-height: 1.15; }
+.brand { font-size: 18px; margin: 0; letter-spacing: -0.01em; white-space: nowrap; }
+.brand-version { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .topbar-actions { display: flex; gap: 4px; align-items: center; }
 .icon-btn { position: relative; min-width: 40px; display: inline-flex; align-items: center; justify-content: center; }
 .dot { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: #f0a400; border: 2px solid var(--surface); }
@@ -263,6 +261,14 @@ body.mode-grid .topbar { position: static; }
 .sync-chip.sync-warn { color: var(--warn-text); background: var(--warn-bg); border-color: transparent; }
 .sync-dot { width: 8px; height: 8px; border-radius: 50%; background: #f0a400; border: 2px solid var(--surface); margin-left: -2px; }
 @media (max-width: 380px) { .sync-chip .sync-label { font-size: 12px; } .sync-chip { padding: 6px 9px; } }
+/* v0.9: "Personal Finance" is longer than the old "Finance TEST" — keep the phone top bar on one line (57px) */
+@media (max-width: 460px) {
+  .brand { font-size: 16px; }
+  .topbar { padding-right: 6px; }
+  .topbar-actions { gap: 2px; }
+  .topbar-actions .btn-ghost:not(.icon-btn) { padding-left: 10px; padding-right: 10px; }
+}
+@media (max-width: 380px) { .sync-chip svg { display: none; } .brand { font-size: 15px; } }
 
 /* ---- clash dialog */
 .clash { border: 1px solid var(--line-strong); border-radius: 12px; padding: 8px 12px 10px; margin: 0; display: grid; gap: 6px; }
@@ -392,3 +398,12 @@ body.mode-grid .toast { bottom: 24px; }
 .recon-earlier { color: var(--warn-text); }
 .recon-amt { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .recon-amt.credit { color: var(--credit); }
+
+/* ---- v0.9 backups and expired recurring items */
+.rec-section-head { margin: 14px 0 4px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.backup-tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line-strong); margin-left: 6px; vertical-align: 1px; }
+.backup-compare { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 14px; }
+.backup-compare th, .backup-compare td { padding: 4px 0; text-align: right; }
+.backup-compare th:first-child, .backup-compare td:first-child { text-align: left; }
+.backup-compare thead th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.backup-compare .differs td { font-weight: 700; }

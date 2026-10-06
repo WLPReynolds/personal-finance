@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Finance Tracker</title>
+  <title>Personal Finance</title>
   <meta name="theme-color" content="#0f5c55">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
@@ -15,7 +15,10 @@
 </head>
 <body>
   <header class="topbar">
-    <h1 class="brand">Finance <span class="badge-test">test</span></h1>
+    <div class="brand-block">
+      <h1 class="brand">Personal Finance</h1>
+      <div class="brand-version" id="brandVersion"></div>
+    </div>
     <div class="topbar-actions">
       <button type="button" id="syncChip" class="sync-chip" hidden></button>
       <button type="button" id="installBtn" class="btn-ghost" hidden>Install</button>
@@ -38,6 +41,7 @@
   <dialog id="recurringDialog" class="sheet sheet-tall"></dialog>
   <dialog id="recurringEditDialog" class="sheet"></dialog>
   <dialog id="reconcileDialog" class="sheet sheet-tall"></dialog>
+  <dialog id="backupsDialog" class="sheet sheet-tall"></dialog>
   <input type="file" id="importInput" hidden>
   <div id="toast" class="toast" role="status" hidden></div>
 

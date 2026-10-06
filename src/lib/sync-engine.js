@@ -4,7 +4,8 @@
  * testable in Node with an in-memory fake Drive:
  *
  *   auth:  { getToken({interactive}) -> Promise<string|null>, hasValidToken(), clearToken(), setLoginHint(email) }
- *   drive: { folderExists, findOrCreateFolder, getMeta, findFile, download, createFile, updateFile, whoAmI }
+ *   drive: { folderExists, findOrCreateFolder, getMeta, findFile, download, createFile, updateFile, whoAmI,
+ *            listFiles, copyFile, deleteFile }   (the last three: v0.9 backups)
  *          (any method may throw an error with .auth === true for an expired/invalid token)
  *   store: { getLocal() -> ledger (synchronous, the app's live copy),
  *            setLocal(ledger) (synchronous: replaces the live copy, persists in the background),
@@ -24,6 +25,7 @@
 import { fingerprint, isEmptyLedger, prepareMerge, applyResolutions, EMPTY_BASE } from './sync-core.js';
 import { buildExport, parseImport } from './transfer-file.js';
 import { randomUUID } from './id.js';
+import { BACKUP_FOLDER_NAME, localDay, dailyBackupName, restoreBackupName, backupsToDelete, describeBackups, monthlyKeeperIds } from './backups.js';
 
 export const DRIVE_FOLDER_NAME = 'Finance';
 export const DRIVE_FILE_NAME = 'personal.json';
@@ -65,6 +67,8 @@ export function createSyncEngine({ auth, drive, store, folderName = DRIVE_FOLDER
       dirty: isDirty(),
       conflicts: pending ? pending.groups : null,
       location: `${folderName}/${fileName}`,
+      lastBackupAt: ss.lastBackupAt ?? null,
+      backupError: ss.backupError ?? null,
     };
   }
 
@@ -232,6 +236,7 @@ export function createSyncEngine({ auth, drive, store, folderName = DRIVE_FOLDER
    * basisLedger/basisHistory = the Drive content this save builds on.
    */
   async function push(token, { fileId, expectedVersion, ledger, basisLedger, basisHistory, folderId }) {
+    await dailyBackup(token, fileId, folderId);
     const fresh = await drive.getMeta(token, fileId);
     if (!fresh || fresh.version !== expectedVersion) return false;
     const writeId = randomUUID();
@@ -244,6 +249,105 @@ export function createSyncEngine({ auth, drive, store, folderName = DRIVE_FOLDER
     pending = null;
     setStatus('idle');
     return true;
+  }
+
+  // ---------------------------------------------------------------- v0.9 backups
+
+  async function backupFolder(token, folderId) {
+    const parent = folderId ?? (ss.folderId && (await drive.folderExists(token, ss.folderId)) ? ss.folderId : await drive.findOrCreateFolder(token, folderName));
+    return drive.findOrCreateFolder(token, BACKUP_FOLDER_NAME, parent);
+  }
+
+  /**
+   * Once a day, just before this device's first save to Drive, Drive copies
+   * the file as it stands (so the copy is always from BEFORE that day's
+   * changes), then old backups are pruned (see backups.js). Whichever device
+   * saves first that day makes it; the other finds it there and skips.
+   * A backup problem never stops a sync — it's shown in ⚙ and retried on the
+   * next save — except an expired sign-in, which the sync handles as usual.
+   */
+  async function dailyBackup(token, fileId, folderId) {
+    const today = localDay(now());
+    if (ss.lastBackupDay === today) return;
+    try {
+      const bf = await backupFolder(token, folderId);
+      const files = await drive.listFiles(token, bf);
+      const name = dailyBackupName(today);
+      if (!files.some((f) => f.name === name)) {
+        const copy = await drive.copyFile(token, fileId, bf, name);
+        files.push({ id: copy.id, name, createdTime: now().toISOString() });
+      }
+      for (const id of backupsToDelete(files, today)) await drive.deleteFile(token, id);
+      await persist({ lastBackupDay: today, lastBackupAt: now().toISOString(), backupError: null });
+    } catch (err) {
+      if (err?.auth) throw err;
+      await persist({ backupError: err?.message ?? String(err) });
+    }
+  }
+
+  function signInFailed() {
+    const e = new Error("Google sign-in didn't complete — tap the cloud button, then try again");
+    e.auth = true;
+    return e;
+  }
+  async function withToken(tokenPromise, fn) {
+    const token = await tokenPromise;
+    if (!token) { setStatus('needs-tap'); throw signInFailed(); }
+    try {
+      return await fn(token);
+    } catch (err) {
+      if (err?.auth) { auth.clearToken(); setStatus('needs-tap'); throw signInFailed(); }
+      throw err;
+    }
+  }
+
+  /**
+   * The backups on Drive, newest first: [{ id, name, createdTime, info: { kind, day, time }, monthly }].
+   * Call straight from a tap — it may need Google's window (see the Android note).
+   */
+  function listBackups() {
+    if (!ss.enabled) return Promise.reject(new Error('Turn on Drive sync first'));
+    const tokenPromise = auth.getToken({ interactive: true });
+    return withToken(tokenPromise, async (token) => {
+      const files = await drive.listFiles(token, await backupFolder(token, null));
+      const monthly = monthlyKeeperIds(files);
+      return describeBackups(files).map((f) => ({ ...f, monthly: monthly.has(f.id) }));
+    });
+  }
+
+  /** One backup's contents → { ledger, exportedAt } (never changes anything). */
+  function readBackup(id) {
+    return withToken(auth.getToken({ interactive: false }), async (token) => parseImport(await drive.download(token, id)));
+  }
+
+  /**
+   * Put a backup's ledger back. First syncs (so nothing on this device is
+   * lost), then has Drive copy the current file as a "before-restore" backup,
+   * then replaces this device's data and saves it to Drive. The other device
+   * takes it on its next sync; anything it hasn't synced yet is merged on top.
+   * → { status: 'restored' | 'blocked' | 'error' | 'needs-tap', reason? }
+   */
+  async function restoreBackup(ledger) {
+    if (!ss.enabled) return { status: 'blocked', reason: 'Drive sync is off' };
+    if (inFlight) await inFlight.catch(() => null);
+    const first = await sync({ interactive: false });
+    if (first.status === 'conflicts') return { status: 'blocked', reason: 'Sort out the sync clash first, then restore.' };
+    if (first.status === 'needs-tap') return { status: 'needs-tap' };
+    if (!['unchanged', 'pushed', 'merged'].includes(first.status)) return { status: 'error', reason: lastError ?? 'Sync failed' };
+    try {
+      await withToken(auth.getToken({ interactive: false }), async (token) => {
+        const bf = await backupFolder(token, ss.folderId);
+        await drive.copyFile(token, ss.fileId, bf, restoreBackupName(now()));
+      });
+    } catch (err) {
+      return { status: err?.auth ? 'needs-tap' : 'error', reason: `Couldn't save a copy of the current data first, so nothing was restored (${err?.message ?? err})` };
+    }
+    store.setLocal(ledger);
+    const after = await sync({ interactive: false });
+    if (after.status === 'conflicts') return { status: 'restored', conflicts: true };
+    return after.status === 'pushed' || after.status === 'merged' || after.status === 'unchanged'
+      ? { status: 'restored' }
+      : { status: 'restored', pending: true }; // restored here; reaches Drive on the next sync
   }
 
   /** Record that this device now holds Drive's version `remote` as its common ancestor. */
@@ -297,6 +401,9 @@ export function createSyncEngine({ auth, drive, store, folderName = DRIVE_FOLDER
     connect,
     disconnect,
     resolveConflicts,
+    listBackups,
+    readBackup,
+    restoreBackup,
     getState: snapshot,
     isEnabled: () => Boolean(ss.enabled),
     onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); },

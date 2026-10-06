@@ -8,7 +8,7 @@ import {
 import {
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
   projections, withProjections, seriesDates, upcomingDates, horizonEnd, describeRule,
-  recurringItems, occurrenceExceptions, itemNumbering, numberLabel, nominalDate,
+  recurringItems, occurrenceExceptions, itemNumbering, numberLabel, nominalDate, seriesFinished,
 } from '../schedule.js';
 import { emptyLedger, addAccount, addTransaction, deleteTransaction, updateTransaction, balanceAsOf, accountRunning } from '../ops.js';
 import { buildGridRows } from '../grid.js';
@@ -437,6 +437,33 @@ test('items saved before v0.7.1 (no everyDays) are unchanged', () => {
   const old = { ...l1, scheduledItems: l1.scheduledItems.map(({ everyDays, ...r }) => r) };
   assert.deepEqual(projections(old, '2026-11-30', HOL).map((x) => x.date), ['2026-10-07', '2026-11-07']);
   assert.equal(recurringItems(updateRecurring(old, item.id, { amount: 700 }))[0].everyDays, null);
+});
+
+console.log('v0.9 — finished series (Expired section)');
+test('a series with an end date is finished only once every payment is confirmed or skipped', () => {
+  const s = setup();
+  const { ledger: l0, item } = addRecurring(s.ledger, base(s.current.id, { endDate: '2026-12-31' })); // 7 Oct, 7 Nov, 7 Dec
+  assert.equal(seriesFinished(l0, item, HOL), false);
+  let l = confirmOccurrence(l0, item.id, '2026-10', { date: '2026-10-07', amount: 599, description: 'Netflix' });
+  l = confirmOccurrence(l, item.id, '2026-11', { date: '2026-11-07', amount: 599, description: 'Netflix' });
+  assert.equal(seriesFinished(l, item, HOL), false, 'December still to pay');
+  const skipped = setOccurrence(l, item.id, '2026-12', { skipped: true });
+  assert.equal(seriesFinished(skipped, item, HOL), true, 'last one skipped = nothing left');
+  l = confirmOccurrence(l, item.id, '2026-12', { date: '2026-12-07', amount: 599, description: 'Netflix' });
+  assert.equal(seriesFinished(l, item, HOL), true);
+});
+test('an overdue, unconfirmed last payment keeps it active; open-ended never finishes', () => {
+  const s = setup();
+  const { ledger, item } = addRecurring(s.ledger, base(s.current.id, { endDate: '2026-10-31' }));
+  assert.equal(seriesFinished(ledger, item, HOL), false);
+  const open = addRecurring(s.ledger, base(s.current.id));
+  assert.equal(seriesFinished(open.ledger, open.item, HOL), false);
+});
+test('a last payment moved past the end date by a one-off date still counts as to pay', () => {
+  const s = setup();
+  const { ledger: l0, item } = addRecurring(s.ledger, base(s.current.id, { endDate: '2026-10-31' }));
+  const moved = setOccurrence(l0, item.id, '2026-10', { date: '2026-11-03' });
+  assert.equal(seriesFinished(moved, item, HOL), false);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
