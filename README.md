@@ -1,4 +1,4 @@
-# Finance Tracker
+# Finance Tracker 
 
 Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadsheets.
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
