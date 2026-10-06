@@ -23,14 +23,14 @@ import {
 import {
   MAX_HORIZON_MONTHS, horizonEnd, withProjections, recurringItems,
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
-  upcomingDates, describeRule, itemNumbering, seriesAmount, numberLabel, statementCardFor,
+  upcomingDates, describeRule, MIN_EVERY_DAYS, MAX_EVERY_DAYS, itemNumbering, seriesAmount, numberLabel, statementCardFor,
 } from './lib/schedule.js';
 import {
   DEFAULT_PAYMENT_DAYS, statementConfig, statementDate, paymentDueDate, statementFor, statementMonthByDate,
   boundaryChoice, withStatements, addMonths, monthOf,
 } from './lib/statements.js';
 
-export const APP_VERSION = '0.7.0';
+export const APP_VERSION = '0.7.1';
 
 const state = {
   ledger: null,
@@ -1279,12 +1279,16 @@ function openRecurringEditor(itemId) {
   const payingStatement = () => payStmt.checked && Boolean(statementConfig(statementCardSelected()));
 
   const every = existing?.everyMonths ?? 1;
+  const freqNow = existing?.everyDays ? 'd' : every === 1 ? '1' : every === 12 ? '12' : 'n';
   const freq = h('select', {},
-    [['1', 'Monthly'], ['n', 'Every few months'], ['12', 'Yearly']].map(([v, l]) =>
-      h('option', { value: v, selected: v === (every === 1 ? '1' : every === 12 ? '12' : 'n') }, l)));
-  const nMonths = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', value: every !== 1 && every !== 12 ? String(every) : '6' });
+    [['1', 'Monthly'], ['n', 'Every few months'], ['12', 'Yearly'], ['d', 'Every so many days']].map(([v, l]) =>
+      h('option', { value: v, selected: v === freqNow }, l)));
+  const nMonths = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', value: freqNow === 'n' ? String(every) : '6' });
   const nField = h('label', { class: 'field' }, h('span', {}, 'Every how many months?'), nMonths);
+  const nDays = h('input', { type: 'number', inputmode: 'numeric', class: 'amount-input', min: String(MIN_EVERY_DAYS), max: String(MAX_EVERY_DAYS), step: '1', value: existing?.everyDays ? String(existing.everyDays) : '90' });
+  const nDaysField = h('label', { class: 'field' }, h('span', {}, `Every how many days? (${MIN_EVERY_DAYS}–${MAX_EVERY_DAYS})`), nDays);
   const day = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', placeholder: '1–31', value: existing ? String(existing.day) : '' });
+  const dayField = h('label', { class: 'field' }, h('span', {}, 'Day of the month'), day);
   const start = h('input', { type: 'date', required: true, value: existing?.startDate ?? todayIso() });
   const end = h('input', { type: 'date', value: existing?.endDate ?? '' });
   const finalAmt = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input', placeholder: 'same', value: existing?.finalAmount != null ? penceToInput(existing.finalAmount) : '' });
@@ -1301,24 +1305,28 @@ function openRecurringEditor(itemId) {
   const preview = h('div', { class: 'rec-preview' });
   const freqDayPair = h('div', { class: 'field-pair' },
     h('label', { class: 'field' }, h('span', {}, 'Repeats'), freq),
-    h('label', { class: 'field' }, h('span', {}, 'Day of the month'), day));
+    dayField);
   const shiftField = h('label', { class: 'field' }, h('span', {}, 'If it lands on a weekend or bank holiday'), shift);
 
   function draft() {
     if (payingStatement()) {
       return {
         description: desc.value, kind, accountId: account.value, toAccountId: toAccount.value,
-        amount: amount.value.trim() === '' ? 0 : parseAmount(amount.value), everyMonths: 1,
+        amount: amount.value.trim() === '' ? 0 : parseAmount(amount.value), everyMonths: 1, everyDays: null,
         day: Number.parseInt(day.value, 10) || existing?.day || 1,
         startDate: start.value, endDate: end.value || null, shift: 'after', finalAmount: null,
         firstNumber: existing?.firstNumber ?? 1, payStatement: true,
       };
     }
-    const everyMonths = freq.value === 'n' ? Number.parseInt(nMonths.value, 10) : Number(freq.value);
+    const byDays = freq.value === 'd';
+    const everyMonths = byDays ? 1 : freq.value === 'n' ? Number.parseInt(nMonths.value, 10) : Number(freq.value);
+    // every N days: whole numbers only ("90.5" or "90abc" is not 90)
+    const everyDays = byDays ? (/^\s*\d+\s*$/.test(nDays.value) ? Number(nDays.value) : NaN) : null;
     return {
       payStatement: false,
       description: desc.value, kind, accountId: account.value, toAccountId: kind === 'transfer' ? toAccount.value : null,
-      amount: parseAmount(amount.value), everyMonths, day: Number.parseInt(day.value, 10),
+      amount: parseAmount(amount.value), everyMonths, everyDays,
+      day: byDays ? Number(start.value.slice(8, 10)) || 1 : Number.parseInt(day.value, 10),
       startDate: start.value, endDate: end.value || null, shift: shift.value,
       finalAmount: end.value && finalAmt.value.trim() ? parseAmount(finalAmt.value) : null,
       firstNumber: end.value ? Number.parseInt(firstNo.value, 10) : (existing?.firstNumber ?? 1),
@@ -1344,13 +1352,19 @@ function openRecurringEditor(itemId) {
     amountLabel.textContent = stmtOn ? 'Estimate (£)' : 'Amount (£)';
     amountHint.hidden = !stmtOn;
     nField.hidden = stmtOn || freq.value !== 'n';
+    nDaysField.hidden = stmtOn || freq.value !== 'd';
+    nDays.disabled = nDaysField.hidden; // a hidden, half-typed number mustn't block saving
+    dayField.hidden = freq.value === 'd';
     endFields.hidden = stmtOn || !end.value;
-    startHint.textContent = freq.value === '1' || stmtOn ? 'Nothing before this date.' : 'Nothing before this date — and it repeats counting from this month.';
+    startHint.textContent = freq.value === 'd' && !stmtOn ? 'The date of the first payment — it repeats every so many days from here.'
+      : freq.value === '1' || stmtOn ? 'Nothing before this date.' : 'Nothing before this date — and it repeats counting from this month.';
     const d = draft();
     let text = '';
     if (stmtOn && d.startDate) {
       const next = upcomingDates(d, todayIso(), 3, state.holidays, card);
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
+    } else if (d.everyDays != null && !(d.everyDays >= MIN_EVERY_DAYS && d.everyDays <= MAX_EVERY_DAYS)) {
+      text = `Repeat every ${MIN_EVERY_DAYS} to ${MAX_EVERY_DAYS} days.`;
     } else if (d.day >= 1 && d.day <= 31 && d.everyMonths >= 1 && d.everyMonths <= 12 && d.startDate) {
       const next = upcomingDates(d, todayIso(), 3, state.holidays);
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
@@ -1370,7 +1384,7 @@ function openRecurringEditor(itemId) {
     preview.style.whiteSpace = 'pre-line';
     preview.hidden = !text;
   }
-  for (const el of [freq, nMonths, day, start, end, shift, finalAmt, firstNo, amount]) el.addEventListener('input', sync);
+  for (const el of [freq, nMonths, nDays, day, start, end, shift, finalAmt, firstNo, amount]) el.addEventListener('input', sync);
   for (const el of [freq, shift, account, toAccount, payStmt]) el.addEventListener('change', sync);
 
   const form = h('form', {
@@ -1381,6 +1395,7 @@ function openRecurringEditor(itemId) {
       if (d.amount === null) return toast('Enter an amount like 12.34', 'error');
       if (!d.payStatement && Number.isNaN(d.day)) return toast('Day of the month must be 1 to 31', 'error');
       if (Number.isNaN(d.everyMonths)) return toast('Repeat every 1 to 12 months', 'error');
+      if (d.everyDays != null && !(d.everyDays >= MIN_EVERY_DAYS && d.everyDays <= MAX_EVERY_DAYS)) return toast(`Repeat every ${MIN_EVERY_DAYS} to ${MAX_EVERY_DAYS} days`, 'error');
       if (end.value && finalAmt.value.trim() && d.finalAmount === null) return toast('Enter the last payment like 12.34, or leave it blank', 'error');
       if (Number.isNaN(d.firstNumber)) return toast('First payment number must be 1 to 999', 'error');
       const next = existing
@@ -1403,6 +1418,7 @@ function openRecurringEditor(itemId) {
   h('label', { class: 'field' }, amountLabel, amount, amountHint),
   freqDayPair,
   nField,
+  nDaysField,
   h('div', { class: 'field-pair' },
     h('label', { class: 'field' }, h('span', {}, 'From'), start),
     h('label', { class: 'field' }, h('span', {}, 'To (blank = no end)'), end)),

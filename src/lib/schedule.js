@@ -17,15 +17,20 @@
  * nothing to fall out of step or duplicate between devices.
  *
  * An occurrence is identified by its MONTH ("period"), not its date: every
- * frequency offered (monthly, every N months, yearly) is at most once a
- * month, and keying by month means changing an item's day doesn't orphan
- * months already confirmed or skipped.
+ * frequency offered (monthly, every N months, yearly, every N days with
+ * N >= 31) is at most once a month, and keying by month means changing an
+ * item's day doesn't orphan months already confirmed or skipped. That is why
+ * "every N days" has a minimum of 31 — weekly/fortnightly would need
+ * occurrences keyed by date instead (not built).
  */
 import { randomUUID } from './id.js';
 import { daysInMonth, shiftToWorkingDay } from './workdays.js';
 import { statementConfig, paymentDueDate, statementFor, addMonths as addStatementMonths } from './statements.js';
 
 export const MAX_HORIZON_MONTHS = 12;
+/** "Every N days" bounds. 31 is the smallest gap that can never land twice in one month (see above). */
+export const MIN_EVERY_DAYS = 31;
+export const MAX_EVERY_DAYS = 366;
 
 /**
  * @typedef {Object} RecurringItem
@@ -37,6 +42,9 @@ export const MAX_HORIZON_MONTHS = 12;
  * @property {string|null} toAccountId   - transfer only: where the money goes (e.g. the credit card)
  * @property {number} amount             - pence
  * @property {number} everyMonths        - 1 = monthly, 12 = yearly, else every N months (counted from the start date's month)
+ * @property {number|null} [everyDays]  - v0.7.1: every N days (MIN_EVERY_DAYS–MAX_EVERY_DAYS) counted from the start date,
+ *                                         which is the first payment. When set, everyMonths/day are ignored here — they hold
+ *                                         an approximation (N/30 months, start date's day) so an older device shows something close.
  * @property {number} day                - 1-31; a shorter month uses its last day
  * @property {string} startDate          - ISO; nothing before this
  * @property {string|null} endDate       - ISO; last entry on or before this. null = indefinitely
@@ -125,8 +133,28 @@ function occurrenceDate(item, period, holidays, card) {
   return nominal ? { nominal, date: shiftToWorkingDay(nominal, item.shift, holidays) } : null;
 }
 
+const DAY_MS = 86400000;
+const dayNo = (iso) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / DAY_MS;
+const isoOfDay = (n) => new Date(n * DAY_MS).toISOString().slice(0, 10);
+
+/** Every-N-days: the one series date in a month (N >= 31, so never two), or null. */
+function nominalDateByDays(item, period) {
+  const { y, m } = periodParts(period);
+  const first = dayNo(`${period}-01`);
+  const last = dayNo(`${period}-${pad(daysInMonth(y, m))}`);
+  const start = dayNo(item.startDate);
+  if (last < start) return null;
+  const k = Math.ceil((Math.max(first, start) - start) / item.everyDays);
+  const n = start + k * item.everyDays;
+  if (n > last) return null;
+  const iso = isoOfDay(n);
+  if (item.endDate && iso > item.endDate) return null;
+  return iso;
+}
+
 /** The series' own date in a month (before any weekend shift), or null if not due that month. */
 export function nominalDate(item, period) {
+  if (item.everyDays) return nominalDateByDays(item, period);
   const offset = monthsBetween(periodOf(item.startDate), period);
   if (offset < 0 || offset % item.everyMonths !== 0) return null;
   const { y, m } = periodParts(period);
@@ -373,6 +401,9 @@ function validateItem(f, ledger) {
     if (f.toAccountId === f.accountId) throw new Error('A transfer needs two different accounts');
   }
   if (!f.payStatement && (!Number.isInteger(f.amount) || f.amount <= 0)) throw new Error('Amount must be more than £0.00');
+  if (f.everyDays !== null && (!Number.isInteger(f.everyDays) || f.everyDays < MIN_EVERY_DAYS || f.everyDays > MAX_EVERY_DAYS)) {
+    throw new Error(`Repeat every ${MIN_EVERY_DAYS} to ${MAX_EVERY_DAYS} days`);
+  }
   if (!Number.isInteger(f.everyMonths) || f.everyMonths < 1 || f.everyMonths > 12) throw new Error('Repeat every 1 to 12 months');
   if (!Number.isInteger(f.day) || f.day < 1 || f.day > 31) throw new Error('Day of the month must be 1 to 31');
   if (!isIso(f.startDate)) throw new Error('A start date is required');
@@ -387,20 +418,25 @@ function validateItem(f, ledger) {
 }
 
 function cleanItemFields(f) {
+  const payStatement = Boolean(f.kind === 'transfer' && f.payStatement);
+  const everyDays = payStatement || f.everyDays == null || f.everyDays === '' ? null : f.everyDays;
+  // every N days: keep an approximate months/day rule alongside, for devices older than v0.7.1
+  const byDays = everyDays !== null && Number.isInteger(everyDays) && isIso(f.startDate);
   return {
     description: (f.description ?? '').trim(),
     kind: f.kind,
     accountId: f.accountId,
     toAccountId: f.kind === 'transfer' ? f.toAccountId : null,
     amount: f.amount,
-    everyMonths: f.everyMonths,
-    day: f.day,
+    everyMonths: byDays ? Math.min(12, Math.max(1, Math.round(everyDays / 30.4375))) : f.everyMonths,
+    everyDays,
+    day: byDays ? Number(f.startDate.slice(8, 10)) : f.day,
     startDate: f.startDate,
     endDate: f.endDate || null,
     shift: f.shift ?? 'none',
     finalAmount: f.payStatement ? null : f.finalAmount ?? null,
     firstNumber: f.firstNumber ?? 1,
-    payStatement: Boolean(f.kind === 'transfer' && f.payStatement),
+    payStatement,
   };
 }
 
@@ -491,6 +527,11 @@ export function describeRule(item, card = null) {
   }
   const nth = (n) => `${n}${n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th'}`;
   const month = new Date(Date.UTC(2000, Number(item.startDate.slice(5, 7)) - 1, 1)).toLocaleDateString('en-GB', { month: 'long', timeZone: 'UTC' });
+  if (item.everyDays) {
+    const from = new Date(`${item.startDate}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+    const shift = item.shift === 'before' ? ' · working day before' : item.shift === 'after' ? ' · next working day' : '';
+    return `Every ${item.everyDays} days from ${from}${shift}`;
+  }
   const freq =
     item.everyMonths === 1 ? `Monthly on the ${nth(item.day)}`
       : item.everyMonths === 12 ? `Yearly on ${item.day} ${month}`

@@ -34,6 +34,8 @@ def add_spend(pg, amount, desc, date, which=None):
         pg.click(f'#txDialog .stmt-choice .seg-btn:has-text("{which}")')
     pg.click('#txDialog button[type=submit]')
     pg.wait_for_selector('#txDialog[open]', state='detached'); saved(pg, 'Added')
+    # the previous entry's "Added" toast may still be up — wait for THIS entry to be drawn
+    pg.wait_for_function('d => [...document.querySelectorAll(".feed .entry")].some(e => e.textContent.trim().startsWith(d))', arg=desc, timeout=5000)
 
 def feed_rows(pg):
     return pg.eval_on_selector_all('.feed .entry', 'els => els.map(e => e.textContent.replace(/\\s+/g, " ").replace(/,/g, "").trim())')

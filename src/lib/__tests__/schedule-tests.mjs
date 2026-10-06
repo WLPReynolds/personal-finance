@@ -8,7 +8,7 @@ import {
 import {
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
   projections, withProjections, seriesDates, upcomingDates, horizonEnd, describeRule,
-  recurringItems, occurrenceExceptions, itemNumbering, numberLabel,
+  recurringItems, occurrenceExceptions, itemNumbering, numberLabel, nominalDate,
 } from '../schedule.js';
 import { emptyLedger, addAccount, addTransaction, deleteTransaction, updateTransaction, balanceAsOf, accountRunning } from '../ops.js';
 import { buildGridRows } from '../grid.js';
@@ -357,6 +357,86 @@ test('itemNumbering for a draft (editor preview)', () => {
   const n = itemNumbering(s.ledger, { ...loan(s.current.id), id: '', firstNumber: 3 });
   assert.equal(n.size, 12);
   assert.deepEqual(n.get('2027-10'), { n: 14, of: 14 });
+});
+
+console.log('every N days (v0.7.1)');
+const sub90 = (accountId, extra = {}) => base(accountId, { description: 'Subscription', everyDays: 90, startDate: '2026-10-15', ...extra });
+test('every 90 days counts days from the first payment, not months', () => {
+  assert.deepEqual(dates(sub90('a'), '2028-01-31'), ['2026-10-15', '2027-01-13', '2027-04-13', '2027-07-12', '2027-10-10', '2028-01-08']);
+});
+test('a month with no payment is simply skipped (31 days from 31 Jan jumps February)', () => {
+  const x = base('a', { everyDays: 31, startDate: '2026-01-31' });
+  assert.deepEqual(dates(x, '2026-05-31'), ['2026-01-31', '2026-03-03', '2026-04-03', '2026-05-04']);
+  assert.equal(nominalDate(x, '2026-02'), null);
+});
+test('never two in one month at the minimum (31) — checked over 10 years', () => {
+  for (const start of ['2026-01-01', '2026-01-31', '2026-02-28', '2027-07-30']) {
+    const ds = dates(base('a', { everyDays: 31, startDate: start }), '2036-12-31');
+    const months = ds.map((d) => d.slice(0, 7));
+    assert.equal(new Set(months).size, months.length, start);
+    for (let i = 1; i < ds.length; i++) {
+      assert.equal((Date.parse(ds[i]) - Date.parse(ds[i - 1])) / 86400000, 31);
+    }
+  }
+});
+test('end date, weekend rule and upcoming dates work with every N days', () => {
+  assert.deepEqual(dates(sub90('a', { endDate: '2027-07-12' }), '2028-12-31'), ['2026-10-15', '2027-01-13', '2027-04-13', '2027-07-12']);
+  assert.deepEqual(dates(sub90('a', { shift: 'after' }), '2027-10-31').slice(-1), ['2027-10-11']); // Sun 10 Oct -> Mon
+  assert.deepEqual(upcomingDates(sub90('a'), '2026-11-01', 2, HOL), ['2027-01-13', '2027-04-13']);
+});
+test('add / validate: minimum 31, maximum 366, whole days only', () => {
+  const s = setup();
+  for (const bad of [30, 7, 0, 367, 90.5]) {
+    assert.throws(() => addRecurring(s.ledger, sub90(s.current.id, { everyDays: bad })), /Repeat every 31 to 366 days/, String(bad));
+  }
+  const { item } = addRecurring(s.ledger, sub90(s.current.id, { everyDays: 31 }));
+  assert.equal(item.everyDays, 31);
+});
+test('stored item keeps an approximate months/day rule for older devices', () => {
+  const s = setup();
+  const { item } = addRecurring(s.ledger, sub90(s.current.id, { everyMonths: 1, day: 7 }));
+  assert.equal(item.everyDays, 90);
+  assert.equal(item.everyMonths, 3);
+  assert.equal(item.day, 15);
+  // an older device ignores everyDays and reads a 3-monthly rule on the 15th
+  const { everyDays, ...old } = item;
+  assert.deepEqual(dates(old, '2027-04-30'), ['2026-10-15', '2027-01-15', '2027-04-15']);
+});
+test('describeRule for every N days', () => {
+  assert.equal(describeRule(sub90('a')), 'Every 90 days from 15 Oct 2026');
+  assert.equal(describeRule(sub90('a', { shift: 'after' })), 'Every 90 days from 15 Oct 2026 · next working day');
+});
+test('switching an existing 3-monthly item to every 90 days keeps confirmed months', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, base(s.current.id, { everyMonths: 3, day: 15, startDate: '2026-10-15' }));
+  let ledger = confirmOccurrence(l1, item.id, '2026-10', { date: '2026-10-15', amount: 599 });
+  ledger = updateRecurring(ledger, item.id, { everyDays: 90 });
+  const p = projections(ledger, '2027-07-31', HOL);
+  assert.deepEqual(p.map((x) => x.date), ['2027-01-13', '2027-04-13', '2027-07-12']);
+  // and back again clears it
+  ledger = updateRecurring(ledger, item.id, { everyDays: null, everyMonths: 3, day: 15 });
+  assert.equal(recurringItems(ledger)[0].everyDays, null);
+  assert.deepEqual(projections(ledger, '2027-04-30', HOL).map((x) => x.date), ['2027-01-15', '2027-04-15']);
+});
+test('numbering and a last payment work with every N days', () => {
+  const s = setup();
+  const { ledger, item } = addRecurring(s.ledger, sub90(s.current.id, { endDate: '2027-07-12', finalAmount: 100 }));
+  const p = projections(ledger, '2027-12-31', HOL);
+  assert.deepEqual(p.map((x) => x.number), [{ n: 1, of: 4 }, { n: 2, of: 4 }, { n: 3, of: 4 }, { n: 4, of: 4 }]);
+  assert.deepEqual(p.map((x) => x.amount), [599, 599, 599, 100]);
+  assert.ok(item);
+});
+test('a plain transfer (e.g. to a card) can repeat every N days', () => {
+  const s = setup();
+  const { item } = addRecurring(s.ledger, { ...sub90(s.current.id), kind: 'transfer', toAccountId: s.barclaycard.id, payStatement: false });
+  assert.equal(item.everyDays, 90);
+});
+test('items saved before v0.7.1 (no everyDays) are unchanged', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, base(s.current.id));
+  const old = { ...l1, scheduledItems: l1.scheduledItems.map(({ everyDays, ...r }) => r) };
+  assert.deepEqual(projections(old, '2026-11-30', HOL).map((x) => x.date), ['2026-10-07', '2026-11-07']);
+  assert.equal(recurringItems(updateRecurring(old, item.id, { amount: 700 }))[0].everyDays, null);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

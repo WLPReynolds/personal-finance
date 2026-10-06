@@ -4,11 +4,25 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.7.0 — Credit card statements and statement payments
+## Status: v0.7.1 — Every N days; card statements and statement payments
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**New in v0.7.1 — every N days**
+- *Repeats* has a new choice, **Every so many days** (31 to 366), for things
+  billed on a fixed number of days rather than a calendar date — e.g. a 90-day
+  subscription. *From* is the date of the first payment; it counts on from
+  there (15 Oct 2026 → 13 Jan → 13 Apr → 12 Jul 2027 …), so it drifts through
+  the month as real 90-day billing does. The day-of-month box is hidden.
+- The minimum is 31 because each payment is still filed under the month it
+  falls in (so a month can't hold two). Weekly/fortnightly would need a
+  different design — not built.
+- The weekend/bank-holiday rule, an end date, "(x of y)" numbering and a
+  different last payment all work as before.
+- To switch an existing item (e.g. one set up as every 3 months), edit it and
+  pick *Every so many days*; months already confirmed stay as they are.
 
 **New in v0.7.0 — card statements**
 - **Card settings** (card → *Account…*): *Statement on working day no.* and
@@ -207,5 +221,5 @@ just clears the old offline cache.
 npm test
 ```
 
-132 tests (incl. two-device sync + stress test, recurring items, card statements), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py` (and the others in `dev/e2e/`).
+143 tests (incl. two-device sync + stress test, recurring items, card statements), plain Node `assert`, no install needed.
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py` (and the others in `dev/e2e/`).
