@@ -4,11 +4,41 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.11.0 — Amounts from the ticket tracker
+## Status: v0.12.0 — Envelopes (Monzo pots)
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**New in v0.12.0 — envelopes (Monzo pots)**
+- **Account… → Envelopes → Split this account into envelopes (pots).** Add
+  the envelopes (Maintenance, Health, Transport, Home Insurance…) with each
+  one's share on the account's opening date. What isn't in an envelope is
+  **Unallocated**, so the envelopes always add up to the account.
+- **Entries made before envelopes were on start as Unallocated** — nothing
+  is lost. The phone banner's amber chip and the grid header say how many are
+  waiting; tap **Unallocated** to list them and pick each one's envelope.
+- **Entry form:** an **Envelope** drop-down (one envelope, *Unallocated —
+  choose later*, or **Split between envelopes…**). Split shows a box per
+  envelope with what's left to assign, and **Split evenly (interest)** —
+  whole pence, the spare pennies to the first envelopes (£1.95 → 49p, 49p,
+  49p, 48p). It also appears when adding a transfer *from* the current
+  account *to* the envelope account (the Monzo side gets the envelopes).
+  Picking a previous description fills in the envelope it used last time.
+- **Move between envelopes** (Envelopes view): moves money inside the
+  account; the account's balance doesn't change.
+- **Envelopes view** (grid: click the envelope box under the header; phone:
+  the chips): each envelope today and at month end; click one for its own
+  entries with a running balance, like a column of the pots spreadsheet.
+- **Recurring items** take an envelope too (e.g. Train fare/Parking →
+  Transport); projected and confirmed entries land in it. An amount that
+  changes each month (ticket tracker, statement balance) can go in one
+  envelope only. A split recurring item whose amount is changed for one
+  month leaves that month Unallocated rather than guessing.
+- Rename envelopes freely (entries point at an id, not the name). An
+  envelope with entries can be **hidden**, not removed.
+- Rows are tagged with their envelope (grid and phone); an even split across
+  all envelopes reads "All envelopes".
 
 **New in v0.11.0 — amounts from the ticket tracker**
 - The ticket tracker publishes its "Set aside on payday" figure for the
@@ -312,7 +342,6 @@ just clears the old offline cache.
 ## Not built yet
 
 1. Excel import (SheetJS) — historical data; October 2026 onwards is being kept as entered
-2. Envelopes UI (Monzo: Transport/Health/Maintenance)
 3. A statement date that doesn't follow the card's rule one month (no override yet); Nationwide's statement rule
 4. Trip Mode, fuzzy search + archive, Export-to-Sheets
 5. Joint/shared ledger with Alison (sync engine is ready; `drive.file` means she opens the shared file once via Google's file picker)
@@ -324,5 +353,5 @@ just clears the old offline cache.
 npm test
 ```
 
-191 tests (incl. two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py` (and the others in `dev/e2e/`).
+228 tests (incl. envelopes, two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py` (and the others in `dev/e2e/`).

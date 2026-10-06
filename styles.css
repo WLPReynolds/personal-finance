@@ -419,3 +419,69 @@ body.locked .topbar-actions, body.locked #fab { display: none !important; }
 #lockDialog [role="alert"]:empty { display: none; }
 /* the phone top bar has no room (and must stay 57px); Lock now is in ⚙ there */
 @media (max-width: 460px) { #lockBtn { display: none !important; } }
+
+/* ---- envelopes (v0.12) */
+.env-tag { color: var(--muted); }
+.c-desc .env-tag { font-size: 0.92em; }
+.env-tag.env-unalloc, .env-unalloc { color: var(--warn-text); font-weight: 600; }
+.env-tag.env-move-tag { color: var(--primary); font-weight: 600; }
+.env-field { display: grid; gap: 6px; }
+.env-split { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: grid; gap: 6px; }
+.env-split-rows { display: grid; gap: 4px; }
+.env-split-row { display: grid; grid-template-columns: 1fr 120px; align-items: center; gap: 10px; font-size: 14px; }
+.env-split-row .amount-input { text-align: right; }
+.env-split-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.env-left { font-variant-numeric: tabular-nums; }
+.env-left.ok { color: var(--credit); font-weight: 600; }
+.env-left.off { color: var(--warn-text); font-weight: 600; }
+/* grid header: envelope balances under the account's total */
+.acc-env {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1px 16px; width: 100%; margin-top: 6px; padding: 5px 7px; text-align: left; cursor: pointer;
+  background: color-mix(in srgb, var(--acc) 7%, var(--surface)); border: 1px solid var(--line); border-radius: 8px;
+  font-size: 11.5px; font-weight: 400; color: var(--text);
+}
+.acc-env:hover { border-color: var(--acc); }
+.acc-env-line { display: flex; justify-content: space-between; gap: 6px; min-width: 0; }
+.acc-env-line.env-unalloc { grid-column: 1 / -1; }
+.acc-env-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-env-amt { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.acc-env-amt.neg, .env-table .neg, .env-hist-bal.neg { color: var(--neg); }
+/* phone banner: envelope chips */
+.banner-env { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.env-chip {
+  display: inline-flex; gap: 6px; align-items: baseline; border: 0; border-radius: 8px; padding: 5px 9px; cursor: pointer;
+  background: rgb(255 255 255 / 18%); color: #fff; font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.env-chip-unalloc { background: rgb(255 255 255 / 92%); color: #7a5300; }
+.env-chip-more { font-weight: 600; }
+/* envelopes dialog */
+.env-table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.env-table th, .env-table td { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.env-table th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.env-table .num { text-align: right; }
+.env-table tbody tr.clickable:hover td { background: var(--surface-2); }
+.env-table tfoot td { font-weight: 700; border-bottom: 0; }
+.env-unalloc-row td:first-child { color: var(--warn-text); font-weight: 600; }
+.env-waiting { font-weight: 400; font-size: 12.5px; }
+.env-back { font-weight: 600; color: var(--primary); }
+.env-hist { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.env-hist li + li { border-top: 1px solid var(--line); }
+.env-hist-row {
+  width: 100%; display: grid; grid-template-columns: 56px 1fr auto 92px; gap: 10px; align-items: center; text-align: left;
+  padding: 9px 12px; background: var(--surface); border: 0; cursor: pointer; font-size: 14px; font-variant-numeric: tabular-nums;
+}
+li.env-hist-row { cursor: default; }
+.env-hist-row.projected { font-style: italic; }
+.env-hist-row.skipped .env-hist-desc, .env-hist-row.skipped .env-hist-amt { text-decoration: line-through; }
+.env-hist-date { color: var(--muted); font-size: 12.5px; }
+.env-hist-desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.env-hist-amt { font-weight: 600; text-align: right; white-space: nowrap; }
+.env-hist-amt.credit { color: var(--credit); }
+.env-hist-bal { text-align: right; color: var(--muted); }
+/* account dialog: envelope list */
+.env-set-body { display: grid; gap: 8px; }
+.env-set-head, .env-set-row { display: grid; grid-template-columns: 1fr 110px 40px 56px; gap: 6px; align-items: center; }
+.env-set-head span:nth-child(2) { text-align: right; }
+.env-set-row input[type=text] { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+.env-set-row .amount-input { text-align: right; }
+.env-set-hidecheck { font-size: 12.5px; gap: 4px; }

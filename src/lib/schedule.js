@@ -27,6 +27,7 @@ import { randomUUID } from './id.js';
 import { daysInMonth, shiftToWorkingDay } from './workdays.js';
 import { statementConfig, paymentDueDate, statementFor, addMonths as addStatementMonths } from './statements.js';
 import { TRACKER_SOURCE, trackerPeriodFor } from './tracker-estimates.js';
+import { envelopeConfig, validateSplits, fitSplits } from './envelopes.js';
 
 export const MAX_HORIZON_MONTHS = 12;
 /** "Every N days" bounds. 31 is the smallest gap that can never land twice in one month (see above). */
@@ -60,6 +61,10 @@ export const MAX_EVERY_DAYS = 366;
  * @property {'ticket-tracker'|null} [amountFrom] - v0.11: take each projected month's amount from the ticket tracker's
  *                                         published figure for the period paid that month (tracker-estimates.js); `amount`
  *                                         is then the fallback. Not with payStatement. Absent/null = off.
+ * @property {{envelopeId: string, amount: number}[]|null} [envelopeSplits] - v0.12: envelopes for the leg on the envelope
+ *                                         account (envelopeLegAccountId). One envelope follows whatever the month's amount
+ *                                         is; a split must add up to `amount`, and a month with a different amount is
+ *                                         left Unallocated. Absent/null = Unallocated.
  * @property {string} createdAt
  */
 
@@ -76,6 +81,23 @@ export const MAX_EVERY_DAYS = 366;
  */
 
 export const isRecurring = (r) => r?.recordType === 'recurring';
+
+/**
+ * v0.12: which of an item's accounts its envelopes are for — the account the
+ * money goes TO for a transfer if that one uses envelopes, else the item's
+ * own account; null when neither does.
+ */
+export function envelopeLegAccountId(item, accounts) {
+  const uses = (id) => Boolean(envelopeConfig(accounts.find((a) => a.id === id)));
+  if (item.kind === 'transfer' && item.toAccountId && uses(item.toAccountId)) return item.toAccountId;
+  return uses(item.accountId) ? item.accountId : null;
+}
+
+/** The envelope splits one month's entry of an item gets, for the leg on `accountId`. */
+function legSplits(item, accountId, amount, accounts) {
+  if (!item?.envelopeSplits || envelopeLegAccountId(item, accounts) !== accountId) return null;
+  return fitSplits(item.envelopeSplits, amount);
+}
 export const isOccurrence = (r) => r?.recordType === 'occurrence';
 
 export function recurringItems(ledger) {
@@ -404,9 +426,14 @@ export function seriesFinished(ledger, item, holidays, sources = {}) {
 
 export function withProjections(ledger, toIso, holidays, sources = {}) {
   const accountIds = new Set(ledger.accounts.map((a) => a.id));
+  const items = new Map(recurringItems(ledger).map((i) => [i.id, i]));
   const legs = projections(ledger, toIso, holidays, sources)
     .flatMap(projectionLegs)
-    .filter((t) => accountIds.has(t.accountId));
+    .filter((t) => accountIds.has(t.accountId))
+    .map((t) => {
+      const splits = legSplits(items.get(t.scheduledItemId), t.accountId, t.amount, ledger.accounts);
+      return splits ? { ...t, envelopeSplits: splits } : t;
+    });
   // confirmed entries of a numbered series get their "(x of y)" too — worked
   // out live, so it follows any later change to the series or a skip
   const numberings = new Map(recurringItems(ledger).filter((i) => i.endDate).map((i) => [i.id, itemNumbering(ledger, i)]));
@@ -453,6 +480,17 @@ function validateItem(f, ledger) {
     if (!Number.isInteger(f.finalAmount) || f.finalAmount <= 0) throw new Error('Last payment must be more than £0.00');
   }
   if (!Number.isInteger(f.firstNumber) || f.firstNumber < 1 || f.firstNumber > 999) throw new Error('First payment number must be 1 to 999');
+  if (f.envelopeSplits) {
+    const legId = envelopeLegAccountId(f, ledger.accounts);
+    if (!legId) throw new Error('Neither account uses envelopes');
+    const account = ledger.accounts.find((a) => a.id === legId);
+    if (f.envelopeSplits.length > 1 && (f.payStatement || f.amountFrom === TRACKER_SOURCE)) {
+      throw new Error('An amount that changes every month can only go into one envelope');
+    }
+    // one envelope takes any amount; a split must add up to the usual amount
+    const check = f.envelopeSplits.length === 1 ? f.envelopeSplits.map((x) => ({ ...x, amount: f.amount || 1 })) : f.envelopeSplits;
+    validateSplits(account, f.envelopeSplits.length === 1 ? f.amount || 1 : f.amount, check);
+  }
 }
 
 function cleanItemFields(f) {
@@ -476,6 +514,9 @@ function cleanItemFields(f) {
     firstNumber: f.firstNumber ?? 1,
     payStatement,
     amountFrom: !payStatement && f.amountFrom === TRACKER_SOURCE ? TRACKER_SOURCE : null,
+    envelopeSplits: !Array.isArray(f.envelopeSplits) || !f.envelopeSplits.length ? null
+      : f.envelopeSplits.length === 1 ? [{ envelopeId: f.envelopeSplits[0].envelopeId, amount: f.amount }]
+        : f.envelopeSplits.map((x) => ({ envelopeId: x.envelopeId, amount: x.amount })),
   };
 }
 
@@ -546,7 +587,7 @@ export function confirmOccurrence(ledger, itemId, period, { date, amount, descri
     const legs = [
       { ...common, id: `${id}:out`, accountId: item.accountId, direction: 'debit', category: 'Transfer', transferId: id },
       { ...common, id: `${id}:in`, accountId: item.toAccountId, direction: 'credit', category: 'Transfer', transferId: id },
-    ];
+    ].map((t) => ({ ...t, envelopeSplits: legSplits(item, t.accountId, amount, ledger.accounts) }));
     const transfer = { id, fromAccountId: item.accountId, toAccountId: item.toAccountId, amount, date, note: text };
     return touch({
       ...ledger,
@@ -554,7 +595,8 @@ export function confirmOccurrence(ledger, itemId, period, { date, amount, descri
       transfers: [...ledger.transfers.filter((t) => t.id !== id), transfer],
     });
   }
-  const tx = { ...common, id, accountId: item.accountId, direction: item.kind === 'in' ? 'credit' : 'debit', category: null, transferId: null };
+  const tx = { ...common, id, accountId: item.accountId, direction: item.kind === 'in' ? 'credit' : 'debit', category: null, transferId: null,
+    envelopeSplits: legSplits(item, item.accountId, amount, ledger.accounts) };
   return touch({ ...ledger, transactions: [...ledger.transactions, tx] });
 }
 

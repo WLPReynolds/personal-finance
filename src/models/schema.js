@@ -41,9 +41,19 @@
  */
 
 /**
+ * v0.12 (see src/lib/envelopes.js). Envelopes are referred to by id, so a
+ * rename never orphans entries. Not allowed on credit cards.
  * @typedef {Object} EnvelopeConfig
  * @property {boolean} enabled
- * @property {string[]} envelopeNames       - user-defined, e.g. ["Maintenance", "Health", "Transport", "Home Insurance"]
+ * @property {Envelope[]} list              - display order; spare interest pennies go to the first ones
+ */
+
+/**
+ * @typedef {Object} Envelope
+ * @property {string} id
+ * @property {string} name                  - e.g. "Maintenance", "Health", "Transport", "Home Insurance"
+ * @property {number} openingBalance        - pence, its share of the account's opening balance (rest = Unallocated)
+ * @property {boolean} hidden               - retired: kept for its history, not offered for new entries
  */
 
 /**
@@ -66,7 +76,9 @@
  * @property {string|null} category
  * @property {'transaction'|'passthrough'|'note'} kind - 'note' = annotation row with no money ("BARCLAYCARD STATEMENT", "In Greece")
  * @property {string|null} transferId      - set on both legs of a transfer, links them
- * @property {EnvelopeSplit[]|null} envelopeSplits - only set on accounts with envelopes enabled; if null, whole amount is unallocated
+ * @property {EnvelopeSplit[]|null} envelopeSplits - v0.12, envelope accounts only: positive amounts adding up to `amount`;
+ *                                            null = whole amount Unallocated. On a note (amount 0) two SIGNED splits adding up
+ *                                            to 0 = a move between envelopes (envelopeId null = Unallocated)
  * @property {string|null} scheduledItemId - set when this is a confirmed entry of a recurring item
  * @property {string} [scheduledPeriod]    - YYYY-MM of the recurring item's month it confirms (only with scheduledItemId)
  * @property {boolean} isProjected         - always false when stored; true only on derived projected rows (never saved)
@@ -77,7 +89,7 @@
 
 /**
  * @typedef {Object} EnvelopeSplit
- * @property {string} envelopeName
+ * @property {string|null} envelopeId     - v0.12 (was envelopeName, never used); null only in a move = Unallocated
  * @property {number} amount               - pence
  */
 

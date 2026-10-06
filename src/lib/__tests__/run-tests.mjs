@@ -7,7 +7,6 @@ import {
   calculateRunningBalance,
   currentBalance,
   findPassthroughCandidates,
-  calculateEnvelopeBalances,
 } from '../balances.js';
 import { createTransfer } from '../ledger.js';
 
@@ -118,42 +117,6 @@ test('ignores note rows', () => {
   const a = tx({ date: '2026-01-01', amount: 0, direction: 'credit', kind: 'note' });
   const b = tx({ date: '2026-01-01', amount: 0, direction: 'debit', kind: 'note' });
   assert.equal(findPassthroughCandidates([a, b]).length, 0);
-});
-
-console.log('calculateEnvelopeBalances');
-test('splits transaction across envelopes (Transport/Health/Maintenance pattern)', () => {
-  const envelopeNames = ['Maintenance', 'Health', 'Transport'];
-  const transactions = [
-    tx({
-      date: '2026-02-28',
-      amount: 79238,
-      direction: 'credit',
-      envelopeSplits: [
-        { envelopeName: 'Maintenance', amount: 12172 },
-        { envelopeName: 'Health', amount: 20866 },
-        { envelopeName: 'Transport', amount: 46200 },
-      ],
-    }),
-    tx({
-      date: '2026-03-10',
-      amount: 27400,
-      direction: 'debit',
-      envelopeSplits: [
-        { envelopeName: 'Health', amount: 12000 },
-        { envelopeName: 'Transport', amount: 15400 },
-      ],
-    }),
-  ];
-  const balances = calculateEnvelopeBalances(transactions, envelopeNames);
-  assert.equal(balances.Maintenance, 12172);
-  assert.equal(balances.Health, 8866);
-  assert.equal(balances.Transport, 30800);
-});
-
-test('ignores transactions with no envelopeSplits', () => {
-  const transactions = [tx({ date: '2026-01-01', amount: 5000, direction: 'debit' })];
-  const balances = calculateEnvelopeBalances(transactions, ['Maintenance']);
-  assert.equal(balances.Maintenance, 0);
 });
 
 console.log('createTransfer');

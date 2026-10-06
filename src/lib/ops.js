@@ -8,6 +8,7 @@
 import { randomUUID } from './id.js';
 import { createTransfer } from './ledger.js';
 import { calculateRunningBalance } from './balances.js';
+import { cleanEnvelopeConfig, envelopesInUse, validateSplits, fitSplits, isEnvelopeMove, envelopeConfig } from './envelopes.js';
 
 export const SCHEMA_VERSION = '2';
 
@@ -56,6 +57,10 @@ export function addAccount(ledger, fields) {
     envelopes: null,
     createdAt: new Date().toISOString(),
   };
+  if (fields.envelopes) {
+    if (account.type === 'credit') throw new Error('A credit card can’t use envelopes');
+    account.envelopes = cleanEnvelopeConfig(fields.envelopes);
+  }
   return { ledger: touch({ ...ledger, accounts: [...ledger.accounts, account] }), account };
 }
 
@@ -79,6 +84,10 @@ export function updateAccount(ledger, id, fields) {
       next.creditCard = { statementWorkingDay: null, nextStatementDateOverride: null, statementBalance: 0, paymentDaysAfter: null };
     }
     if (next.creditCard) next.creditCard = cleanCreditCard(next.creditCard);
+    if ('envelopes' in fields) {
+      if (next.type === 'credit' && fields.envelopes?.list?.length) throw new Error('A credit card can’t use envelopes');
+      next.envelopes = cleanEnvelopeConfig(fields.envelopes, a.envelopes, envelopesInUse(ledger, a.id));
+    }
     return next;
   });
   return touch({ ...ledger, accounts });
@@ -114,7 +123,7 @@ function blankTx(fields) {
     category: null,
     kind: fields.kind ?? 'transaction',
     transferId: null,
-    envelopeSplits: null,
+    envelopeSplits: fields.envelopeSplits ?? null,
     scheduledItemId: null,
     isProjected: false,
     statementMonth: fields.statementMonth ?? null,
@@ -143,6 +152,11 @@ function validate(fields) {
  */
 export function addTransaction(ledger, fields) {
   validate(fields);
+  const acc = (id) => ledger.accounts.find((a) => a.id === id);
+  // v0.12: envelopes for this entry, and for the other leg of a transfer into/out of an envelope account
+  const ownSplits = fields.kind === 'note' ? null : validateSplits(acc(fields.accountId), fields.amount, fields.envelopeSplits);
+  const otherSplits = fields.kind === 'note' || !fields.counterpartAccountId ? null
+    : validateSplits(acc(fields.counterpartAccountId), fields.amount, fields.counterpartEnvelopeSplits);
   if (fields.counterpartAccountId && fields.kind !== 'note') {
     if (fields.counterpartAccountId === fields.accountId) throw new Error('Pick a different account for the other side');
     const from = fields.direction === 'debit' ? fields.accountId : fields.counterpartAccountId;
@@ -157,13 +171,15 @@ export function addTransaction(ledger, fields) {
     // keep the leg for the account the user is looking at first, so it sorts naturally
     const ordered = transactions[0].accountId === fields.accountId ? transactions : [transactions[1], transactions[0]];
     if (fields.statementMonth) ordered[0] = { ...ordered[0], statementMonth: fields.statementMonth };
+    if (ownSplits) ordered[0] = { ...ordered[0], envelopeSplits: ownSplits };
+    if (otherSplits) ordered[1] = { ...ordered[1], envelopeSplits: otherSplits };
     return touch({
       ...ledger,
       transactions: [...ledger.transactions, ...ordered],
       transfers: [...ledger.transfers, transfer],
     });
   }
-  return touch({ ...ledger, transactions: [...ledger.transactions, blankTx(fields)] });
+  return touch({ ...ledger, transactions: [...ledger.transactions, blankTx({ ...fields, envelopeSplits: ownSplits })] });
 }
 
 /** Fields whose change means a reconciled entry must be checked again (v0.8). A new description doesn't. */
@@ -181,9 +197,15 @@ const changedFrom = (before, after, keys) => keys.some((k) => (after[k] ?? null)
 export function updateTransaction(ledger, id, fields) {
   const existing = ledger.transactions.find((t) => t.id === id);
   if (!existing) throw new Error('Transaction not found');
+  if (isEnvelopeMove(existing)) throw new Error('Edit a move between envelopes from its own dialog');
   const merged = { ...existing, ...fields };
   validate(merged);
   if (merged.kind === 'note') merged.amount = 0;
+  // v0.12 envelopes: given → checked; not given → the old ones follow a new amount where they can
+  const account = ledger.accounts.find((a) => a.id === merged.accountId);
+  if (merged.kind === 'note') merged.envelopeSplits = null;
+  else if ('envelopeSplits' in fields && envelopeConfig(account)) merged.envelopeSplits = validateSplits(account, merged.amount, fields.envelopeSplits);
+  else merged.envelopeSplits = fitSplits(existing.envelopeSplits, merged.amount);
   merged.description = (merged.description ?? '').trim();
   if (existing.reconciled && changedFrom(existing, merged, RECONCILE_FIELDS)) merged.reconciled = false;
 
@@ -196,6 +218,7 @@ export function updateTransaction(ledger, id, fields) {
     if (t.id === id) return merged;
     if (t.transferId === existing.transferId) {
       const leg = { ...t, date: merged.date, amount: merged.amount, description: merged.description, direction: opposite };
+      if (t.envelopeSplits) leg.envelopeSplits = fitSplits(t.envelopeSplits, merged.amount);
       if (t.reconciled && changedFrom(t, leg, ['amount', 'date', 'direction'])) leg.reconciled = false;
       return leg;
     }
@@ -250,6 +273,60 @@ export function setStatementMonth(ledger, id, month) {
       return next;
     }),
   });
+}
+
+// ------------------------------------------------------------ envelopes (v0.12)
+
+/**
+ * Put one entry into envelopes (e.g. the Monzo leg of a transfer edited from
+ * the current account's side). splits null/[] = Unallocated.
+ */
+export function setEnvelopeSplits(ledger, id, splits) {
+  const t = ledger.transactions.find((x) => x.id === id);
+  if (!t) throw new Error('Transaction not found');
+  if (t.kind === 'note') throw new Error('A note has no money to put in an envelope');
+  const account = ledger.accounts.find((a) => a.id === t.accountId);
+  const clean = validateSplits(account, t.amount, splits);
+  return touch({ ...ledger, transactions: ledger.transactions.map((x) => (x.id === id ? { ...x, envelopeSplits: clean } : x)) });
+}
+
+function moveRecord(ledger, fields) {
+  const account = ledger.accounts.find((a) => a.id === fields.accountId);
+  if (!envelopeConfig(account)) throw new Error('This account doesn’t use envelopes');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.date ?? '')) throw new Error('A valid date is required');
+  if (!Number.isInteger(fields.amount) || fields.amount <= 0) throw new Error('Amount must be more than £0.00');
+  const from = fields.fromEnvelopeId ?? null;
+  const to = fields.toEnvelopeId ?? null;
+  const known = new Set(account.envelopes.list.map((e) => e.id));
+  for (const id of [from, to]) if (id !== null && !known.has(id)) throw new Error('Pick an envelope');
+  if (from === to) throw new Error('Pick two different envelopes');
+  return {
+    accountId: account.id,
+    date: fields.date,
+    amount: 0,
+    direction: 'credit',
+    description: (fields.description ?? '').trim() || 'Move between envelopes',
+    kind: 'note',
+    envelopeSplits: [{ envelopeId: from, amount: -fields.amount }, { envelopeId: to, amount: fields.amount }],
+  };
+}
+
+/**
+ * Move money from one envelope to another (null = Unallocated). Stored as a
+ * note — the account's balance doesn't change, and a device older than v0.12
+ * just shows it as a note.
+ * fields: { accountId, date, amount, fromEnvelopeId, toEnvelopeId, description }
+ */
+export function addEnvelopeMove(ledger, fields) {
+  const rec = moveRecord(ledger, fields);
+  return touch({ ...ledger, transactions: [...ledger.transactions, { ...blankTx({ ...rec, kind: 'note', description: rec.description }), ...rec }] });
+}
+
+export function updateEnvelopeMove(ledger, id, fields) {
+  const existing = ledger.transactions.find((t) => t.id === id);
+  if (!isEnvelopeMove(existing)) throw new Error('Move not found');
+  const rec = moveRecord(ledger, { accountId: existing.accountId, ...fields });
+  return touch({ ...ledger, transactions: ledger.transactions.map((t) => (t.id === id ? { ...t, ...rec } : t)) });
 }
 
 /** The other leg of a transfer, or null. */

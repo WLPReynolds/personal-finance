@@ -109,30 +109,4 @@ export function findPassthroughCandidates(transactions) {
   return pairs;
 }
 
-/**
- * Apply envelope splits to compute per-envelope balances for an account
- * that has envelopes enabled. Transactions without envelopeSplits are
- * ignored (unallocated money isn't tracked per-envelope).
- *
- * @param {import('../models/schema.js').Transaction[]} transactions - all for one account
- * @param {string[]} envelopeNames
- * @param {Object.<string, number>} openingEnvelopeBalances - pence
- * @returns {Object.<string, number>} envelopeName -> balance (pence)
- */
-export function calculateEnvelopeBalances(transactions, envelopeNames, openingEnvelopeBalances = {}) {
-  const balances = {};
-  for (const name of envelopeNames) {
-    balances[name] = openingEnvelopeBalances[name] ?? 0;
-  }
-
-  const sorted = sortForBalance(transactions);
-  for (const tx of sorted) {
-    if (!tx.envelopeSplits) continue;
-    for (const split of tx.envelopeSplits) {
-      if (!(split.envelopeName in balances)) continue; // ignore unknown envelope names defensively
-      const signed = tx.direction === 'credit' ? split.amount : -split.amount;
-      balances[split.envelopeName] += signed;
-    }
-  }
-  return balances;
-}
+// Envelope balances moved to envelopes.js in v0.12 (envelopes by id, not name).

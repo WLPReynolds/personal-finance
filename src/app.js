@@ -18,8 +18,12 @@ import { createSyncEngine } from './lib/sync-engine.js';
 import {
   emptyLedger, addAccount, updateAccount, deleteAccount, moveAccount,
   addTransaction, updateTransaction, deleteTransaction, setStatementMonth,
-  accountRunning, balanceAsOf, counterpartOf,
+  accountRunning, balanceAsOf, counterpartOf, setEnvelopeSplits, addEnvelopeMove, updateEnvelopeMove,
 } from './lib/ops.js';
+import {
+  UNALLOCATED, envelopeConfig, envelopeList, envelopeName, newEnvelope, envelopesInUse, splitEvenly,
+  envelopeBalances, envelopeHistory, allocationOf, unallocatedEntries, isEnvelopeMove,
+} from './lib/envelopes.js';
 import { buildGridRows } from './lib/grid.js';
 import { parseAmount, formatPence, penceToInput } from './lib/money.js';
 import { INSTITUTIONS, institutionStyle } from './lib/institutions.js';
@@ -31,6 +35,7 @@ import {
   MAX_HORIZON_MONTHS, horizonEnd, withProjections, recurringItems,
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
   upcomingDates, describeRule, MIN_EVERY_DAYS, MAX_EVERY_DAYS, itemNumbering, seriesAmount, numberLabel, statementCardFor, seriesFinished,
+  envelopeLegAccountId,
 } from './lib/schedule.js';
 import {
   DEFAULT_PAYMENT_DAYS, statementConfig, statementDate, paymentDueDate, statementFor, statementMonthByDate,
@@ -43,7 +48,7 @@ import {
   TRACKER_SOURCE, TRACKER_CHECK_MS, refreshTrackerEstimates, usesTracker, trackerPeriodFor,
 } from './lib/tracker-estimates.js';
 
-export const APP_VERSION = '0.11.0';
+export const APP_VERSION = '0.12.0';
 
 const state = {
   ledger: null,
@@ -60,6 +65,7 @@ const state = {
   holidayInfo: { source: 'built-in', fetchedAt: null, lastYear: lastKnownYear(BUILT_IN_BANK_HOLIDAYS) },
   vault: null, // v0.10: the passphrase lock's header while it's on (this device only)
   tracker: null, // v0.11: the ticket tracker's figures as last read from Drive (this device only)
+  envView: null, // v0.12: { accountId, envelopeId } shown in the envelopes dialog (undefined id = all envelopes)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -502,6 +508,7 @@ async function commit(nextLedger, message) {
   try {
     await saveLedger(nextLedger);
     render();
+    if ($('envelopeDialog').open) renderEnvelopeDialog();
     if (message) toast(message);
     renderSyncChip();
     scheduleSync();
@@ -633,7 +640,8 @@ function renderList(accounts) {
     })(),
     h('div', { class: 'banner-btns' },
       h('button', { type: 'button', class: 'banner-edit', onclick: () => openAccountDialog(active.id) }, 'Account…'),
-      h('button', { type: 'button', class: 'banner-edit banner-rec', onclick: () => openReconcileDialog(active.id) }, 'Reconcile…')));
+      h('button', { type: 'button', class: 'banner-edit banner-rec', onclick: () => openReconcileDialog(active.id) }, 'Reconcile…')),
+    envBannerBlock(active, todayIsoStr));
 
   // Oldest first, same order as the grid: future entries at the bottom.
   const running = accountRunning(view, active);
@@ -667,6 +675,8 @@ function renderList(accounts) {
     const otherAcc = other ? accountById(other.accountId) : null;
     const p = t.isProjected ? t.projection : null;
     const tags = p ? projectionTags(p, today) : null;
+    const env = envTag(t, active);
+    const move = isEnvelopeMove(t);
     feed.append(h('li', {},
       h('button', {
         type: 'button',
@@ -677,12 +687,15 @@ function renderList(accounts) {
           h('span', { class: 'entry-desc' }, p ? h('span', { class: 'rec-icon', 'aria-label': 'Recurring' }, '↻ ') : null,
             h('span', { class: 'desc-text' }, t.description || '(no description)'),
             t.seriesNo ? h('span', { class: 'series-no' }, numberLabel(t.seriesNo)) : null),
-          otherAcc || tags || t.stmtTag ? h('span', { class: 'entry-link' },
+          otherAcc || tags || t.stmtTag || env ? h('span', { class: 'entry-link' },
             otherAcc ? `${t.direction === 'debit' ? '→' : '←'} ${otherAcc.name}` : '',
             otherAcc && tags ? ' · ' : '',
             tags ? h('span', { class: 'rec-tag' }, tags.label) : null,
-            t.stmtTag ? h('span', { class: 'stmt-tag' }, (otherAcc || tags ? ' · ' : '') + stmtTagText(t.stmtTag, t.stmtMonth, active)) : null) : null),
-        t.kind === 'note'
+            t.stmtTag ? h('span', { class: 'stmt-tag' }, (otherAcc || tags ? ' · ' : '') + stmtTagText(t.stmtTag, t.stmtMonth, active)) : null,
+            env ? h('span', { class: `env-tag ${env.cls}` }, (otherAcc || tags || t.stmtTag ? ' · ' : '') + env.text) : null) : null),
+        move
+          ? h('span', { class: 'entry-amt muted' }, 'move')
+          : t.kind === 'note'
           ? h('span', { class: 'entry-amt muted' }, 'note')
           : h('span', { class: 'entry-amts' },
               h('span', { class: `entry-amt ${t.direction}` }, isReconciled(t) ? h('span', { class: 'rec-tick', title: 'Reconciled' }, '✓ ') : null, `${t.direction === 'credit' ? '+' : '−'}${formatPence(t.amount)}`),
@@ -737,6 +750,16 @@ function renderGrid(accounts) {
   const rows = buildGridRows(view, accounts);
   const today = todayIso();
   const reconciledIds = new Set(state.ledger.transactions.filter(isReconciled).map((t) => t.id));
+  const envAccounts = accounts.filter((a) => envelopeConfig(a));
+  const txById = envAccounts.length ? new Map(view.transactions.map((t) => [t.id, t])) : null;
+  /** envelope tag for a grid row: from its leg on the envelope account */
+  const rowEnvTag = (row) => {
+    for (const a of envAccounts) {
+      const tx = row.cells[a.id] && txById.get(row.cells[a.id].txId);
+      if (tx) return envTag(tx, a);
+    }
+    return null;
+  };
 
   const head1 = h('tr', {},
     h('th', { class: 'sticky-l c-date', rowspan: '2' }, 'Date'),
@@ -753,6 +776,7 @@ function renderGrid(accounts) {
             h('button', { type: 'button', class: 'acc-add', title: `Add entry to ${a.name}`, onclick: () => openTxDialog({ accountId: a.id }) }, '+'))),
         h('div', { class: `acc-total ${todayBal < 0 ? 'neg' : ''}` }, `${a.type === 'credit' ? 'Owed ' : ''}${formatPence(todayBal)}`),
         h('div', { class: 'acc-eom', dataset: { eomFor: a.id } }),
+        envHeaderBlock(a, today),
         (() => {
           const o = cardOutlook(a, view, today);
           return o ? h('button', { type: 'button', class: 'btn-link acc-stmt', title: outlookText(a, o), onclick: () => openStatementDialog(a.id, o.st.month) }, outlookText(a, o, true)) : null;
@@ -798,6 +822,7 @@ function renderGrid(accounts) {
     const p = row.projection;
     const tags = p ? projectionTags(p, today) : null;
     const openRow = () => (p ? openOccurrenceDialog(p.itemId, p.period) : openTxDialog({ txId: row.txIds[0] }));
+    const env = rowEnvTag(row);
     const tr = h('tr', {
       class: `${monthStart} ${row.kind === 'note' ? 'row-note' : ''} ${future ? 'future' : ''} ${row.date === today ? 'is-today' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''}`,
       dataset: { date: row.date },
@@ -807,7 +832,8 @@ function renderGrid(accounts) {
         p ? h('span', { class: 'rec-icon', title: `Recurring — ${tags.label}` }, '↻ ') : null,
         row.isTransfer ? h('span', { class: 'link-icon', title: 'Linked transfer' }, '⇄ ') : null, row.description,
         row.seriesNo ? h('span', { class: 'series-no' }, ` ${numberLabel(row.seriesNo)}`) : null,
-        row.stmtTag ? h('span', { class: 'stmt-tag' }, ` ${stmtTagText(row.stmtTag.tag, row.stmtTag.month, accountById(Object.keys(row.cells).find((id) => statementConfig(accountById(id)))) ?? accounts[0])}`) : null));
+        row.stmtTag ? h('span', { class: 'stmt-tag' }, ` ${stmtTagText(row.stmtTag.tag, row.stmtTag.month, accountById(Object.keys(row.cells).find((id) => statementConfig(accountById(id)))) ?? accounts[0])}`) : null,
+        env ? h('span', { class: `env-tag ${env.cls}` }, ` · ${env.text}`) : null));
     for (const a of accounts) {
       const cell = row.cells[a.id];
       const rec = cell?.txId && reconciledIds.has(cell.txId) ? ' is-rec' : '';
@@ -829,7 +855,7 @@ function renderGrid(accounts) {
   const wrap = h('div', { class: 'grid-wrap' }, table);
   app.replaceChildren(
     h('div', { class: 'grid-view' },
-      h('p', { class: 'grid-hint muted small' }, 'Click an empty Credit/Debit cell to add to that account on that date · click a value or description to edit · ⇄ = linked transfer · ↻ = recurring, click to confirm · ▤ = card statement, click to check it · ✓ = reconciled (✓ button in a header to reconcile)'),
+      h('p', { class: 'grid-hint muted small' }, 'Click an empty Credit/Debit cell to add to that account on that date · click a value or description to edit · ⇄ = linked transfer · ↻ = recurring, click to confirm · ▤ = card statement, click to check it · ✓ = reconciled (✓ button in a header to reconcile)', envAccounts.length ? ' · envelope balances under a header: click for each envelope' : ''),
       wrap));
 
   // The "month in view" line tracks whichever row sits just below the
@@ -889,6 +915,7 @@ function renderGrid(accounts) {
 function openTxDialog(opts) {
   const dlg = $('txDialog');
   const existing = opts.txId ? state.ledger.transactions.find((t) => t.id === opts.txId) : null;
+  if (isEnvelopeMove(existing)) return openMoveDialog({ txId: existing.id });
   const account = accountById(existing ? existing.accountId : opts.accountId ?? state.activeAccountId);
   if (!account) return;
   const words = directionWords(account);
@@ -952,12 +979,34 @@ function openTxDialog(opts) {
     return chosen === statementMonthByDate(account, date.value, state.holidays) ? null : chosen;
   }
 
+  // v0.12 envelopes: for this entry, or for the other leg of a transfer into/out of the envelope account
+  const envTarget = () => {
+    if (kind === 'note') return null;
+    if (envelopeConfig(account)) return account;
+    const other = accountById(existing ? counterpart?.accountId : counterpartSelect.value);
+    return envelopeConfig(other) ? other : null;
+  };
+  const picker = envelopePicker({ getAmount: () => parseAmount(amount.value) });
+  function syncEnvelope() {
+    const target = envTarget();
+    picker.el.hidden = !target;
+    if (!target) return;
+    if (target.id !== picker.accountId) {
+      const initial = !existing ? null : target.id === account.id ? existing.envelopeSplits : counterpart?.envelopeSplits;
+      picker.setAccount(target, initial ?? null);
+    }
+    picker.refresh();
+  }
+  amount.addEventListener('input', () => picker.refresh());
+  counterpartSelect.addEventListener('change', syncEnvelope);
+
   function syncKind() {
     for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === kind));
     amountField.hidden = kind === 'note';
     if (counterpartField && !existing) counterpartField.hidden = kind === 'note';
     updateCounterpartHint();
     syncStatement();
+    syncEnvelope();
   }
   function updateCounterpartHint() {
     const other = accountById(counterpartSelect.value);
@@ -983,6 +1032,7 @@ function openTxDialog(opts) {
     if (!amount.value && prev.kind !== 'note') amount.value = penceToInput(prev.amount);
     if (prev.counterpartAccountId && others.some((a) => a.id === prev.counterpartAccountId)) counterpartSelect.value = prev.counterpartAccountId;
     syncKind();
+    if (prev.envelopeId && !picker.el.hidden) picker.setSingle(prev.envelopeId);
   });
 
   const amountField = h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount);
@@ -1002,11 +1052,20 @@ function openTxDialog(opts) {
       };
       if (hasStatements) fields.statementMonth = kind === 'note' ? null : statementMonthToSave();
       if (kind !== 'note' && fields.amount === null) return toast('Enter an amount like 12.34', 'error');
+      const env = picker.el.hidden ? null : picker.value();
+      if (env?.error) return toast(env.error, 'error');
+      const envOwn = env && picker.accountId === account.id;
+      if (envOwn) fields.envelopeSplits = env.splits;
       let next;
       if (existing) {
-        next = attempt(() => updateTransaction(state.ledger, existing.id, fields));
+        next = attempt(() => {
+          const n = updateTransaction(state.ledger, existing.id, fields);
+          return env && !envOwn ? setEnvelopeSplits(n, counterpart.id, env.splits) : n;
+        });
       } else {
-        next = attempt(() => addTransaction(state.ledger, { ...fields, counterpartAccountId: counterpartSelect.value || null }));
+        next = attempt(() => addTransaction(state.ledger, {
+          ...fields, counterpartAccountId: counterpartSelect.value || null, counterpartEnvelopeSplits: env && !envOwn ? env.splits : null,
+        }));
       }
       if (!next) return;
       if (existing) {
@@ -1029,6 +1088,7 @@ function openTxDialog(opts) {
   h('label', { class: 'field' }, h('span', {}, 'Date'), date, dateWarn),
   stmtField,
   counterpartField,
+  picker.el,
   recurringNote,
   existing && isReconciled(existing) ? h('div', { class: 'linked' }, '✓ Reconciled — matched against the bank. Changing the amount or date will untick it.') : null,
   h('div', { class: 'sheet-actions' },
@@ -1068,7 +1128,10 @@ function recentDescriptions(accountId) {
       const key = t.description.trim().toLowerCase();
       if (!key || seen.has(key)) continue;
       const other = counterpartOf(state.ledger, t);
-      seen.set(key, { description: t.description, amount: t.amount, direction: t.direction, kind: t.kind, counterpartAccountId: other?.accountId ?? null });
+      // v0.12: the envelope it went in last time (single envelope only), to prefill
+      const envLeg = envelopeConfig(accountById(t.accountId)) ? t : other && envelopeConfig(accountById(other.accountId)) ? other : null;
+      const envelopeId = envLeg?.envelopeSplits?.length === 1 ? envLeg.envelopeSplits[0].envelopeId : null;
+      seen.set(key, { description: t.description, amount: t.amount, direction: t.direction, kind: t.kind, counterpartAccountId: other?.accountId ?? null, envelopeId });
     }
   };
   pass(true);
@@ -1094,7 +1157,9 @@ function itemAmountText(item) {
 }
 function itemAccountsText(item) {
   const name = (id) => accountById(id)?.name ?? 'missing account';
-  return item.kind === 'transfer' ? `${name(item.accountId)} → ${name(item.toAccountId)}` : name(item.accountId);
+  const text = item.kind === 'transfer' ? `${name(item.accountId)} → ${name(item.toAccountId)}` : name(item.accountId);
+  const envAcc = item.envelopeSplits ? accountById(envelopeLegAccountId(item, state.ledger.accounts)) : null;
+  return envAcc ? `${text} · ${splitsNames(item.envelopeSplits, envAcc)}` : text;
 }
 
 /** Tap on a projected entry: confirm it, change/skip just this month, or edit the series. */
@@ -1529,6 +1594,23 @@ function openRecurringEditor(itemId) {
     trackerHint);
   const statementCardSelected = () => (kind === 'transfer' ? accountById(toAccount.value) : null);
   const payingStatement = () => payStmt.checked && Boolean(statementConfig(statementCardSelected()));
+  // v0.12: which envelope(s) the money goes in / comes out of
+  const envPicker = envelopePicker({ getAmount: () => (amount.value.trim() === '' ? null : parseAmount(amount.value)) });
+  let envSingleOnly = null;
+  function syncEnvelope() {
+    const legId = envelopeLegAccountId({ kind, accountId: account.value, toAccountId: kind === 'transfer' ? toAccount.value : null }, state.ledger.accounts);
+    const envAcc = accountById(legId);
+    envPicker.el.hidden = !envAcc;
+    if (!envAcc) return;
+    const singleOnly = payingStatement() || fromTracker.checked; // amount changes every month: one envelope only
+    if (envAcc.id !== envPicker.accountId || singleOnly !== envSingleOnly) {
+      const initial = envPicker.accountId === null ? (existing && envelopeLegAccountId(existing, state.ledger.accounts) === envAcc.id ? existing.envelopeSplits : null)
+        : envPicker.accountId === envAcc.id ? envPicker.value().splits : null;
+      envPicker.setAccount(envAcc, initial ?? null, { allowSplit: !singleOnly });
+      envSingleOnly = singleOnly;
+    }
+    envPicker.refresh();
+  }
 
   const every = existing?.everyMonths ?? 1;
   const freqNow = existing?.everyDays ? 'd' : every === 1 ? '1' : every === 12 ? '12' : 'n';
@@ -1568,6 +1650,7 @@ function openRecurringEditor(itemId) {
         day: Number.parseInt(day.value, 10) || existing?.day || 1,
         startDate: start.value, endDate: end.value || null, shift: 'after', finalAmount: null,
         firstNumber: existing?.firstNumber ?? 1, payStatement: true, amountFrom: null,
+        envelopeSplits: envPicker.el.hidden ? null : envPicker.value().splits ?? null,
       };
     }
     const byDays = freq.value === 'd';
@@ -1583,6 +1666,7 @@ function openRecurringEditor(itemId) {
       startDate: start.value, endDate: end.value || null, shift: shift.value,
       finalAmount: end.value && finalAmt.value.trim() ? parseAmount(finalAmt.value) : null,
       firstNumber: end.value ? Number.parseInt(firstNo.value, 10) : (existing?.firstNumber ?? 1),
+      envelopeSplits: envPicker.el.hidden ? null : envPicker.value().splits ?? null,
     };
   }
   function sync() {
@@ -1616,6 +1700,7 @@ function openRecurringEditor(itemId) {
     endFields.hidden = stmtOn || !end.value;
     startHint.textContent = freq.value === 'd' && !stmtOn ? 'The date of the first payment — it repeats every so many days from here.'
       : freq.value === '1' || stmtOn ? 'Nothing before this date.' : 'Nothing before this date — and it repeats counting from this month.';
+    syncEnvelope();
     const d = draft();
     let text = '';
     if (stmtOn && d.startDate) {
@@ -1656,6 +1741,8 @@ function openRecurringEditor(itemId) {
     method: 'dialog', class: 'sheet-body',
     onsubmit: (e) => {
       e.preventDefault();
+      const env = envPicker.el.hidden ? null : envPicker.value();
+      if (env?.error) return toast(env.error, 'error');
       const d = draft();
       if (d.amount === null) return toast('Enter an amount like 12.34', 'error');
       if (!d.payStatement && Number.isNaN(d.day)) return toast('Day of the month must be 1 to 31', 'error');
@@ -1683,6 +1770,7 @@ function openRecurringEditor(itemId) {
   payStmtField,
   trackerField,
   h('label', { class: 'field' }, amountLabel, amount, amountHint),
+  envPicker.el,
   freqDayPair,
   nField,
   nDaysField,
@@ -1711,6 +1799,391 @@ function openRecurringEditor(itemId) {
   openDialog(dlg);
 }
 
+// ------------------------------------------------------------------ envelopes (v0.12)
+
+/** Tag for an entry on an envelope account: { text, cls } or null. */
+function envTag(t, account) {
+  const al = allocationOf(t, account);
+  if (!al) return null;
+  if (al.type === 'single') return { text: envelopeName(account, al.envelopeId), cls: '' };
+  if (al.type === 'split') {
+    const visible = envelopeList(account).map((e) => e.id);
+    const all = visible.length > 2 && visible.every((id) => t.envelopeSplits.some((s) => s.envelopeId === id));
+    return { text: all ? 'All envelopes' : t.envelopeSplits.map((s) => envelopeName(account, s.envelopeId)).join(' + '), cls: 'env-split-tag' };
+  }
+  if (al.type === 'move') return { text: `${envelopeName(account, al.from)} → ${envelopeName(account, al.to)} ${formatPence(al.amount)}`, cls: 'env-move-tag' };
+  return { text: 'Unallocated', cls: 'env-unalloc' };
+}
+
+/** "Transport" / "Maintenance + Health" for a recurring item's envelopes. */
+function splitsNames(splits, account) {
+  return (splits ?? []).map((s) => envelopeName(account, s.envelopeId)).join(' + ');
+}
+
+/**
+ * The envelope field used by the entry form and the recurring editor:
+ * a drop-down of envelopes (+ Unallocated, + Split…), and when splitting an
+ * amount box per envelope with what's left to assign and "Split evenly".
+ */
+function envelopePicker({ getAmount }) {
+  let acct = null;
+  let allowSplit = true;
+  let inputs = new Map();
+  const select = h('select', { class: 'env-select' });
+  const label = h('span', {});
+  const rows = h('div', { class: 'env-split-rows' });
+  const left = h('div', { class: 'env-left small' });
+  const evenBtn = h('button', { type: 'button', class: 'btn-secondary btn-small', onclick: () => fillEvenly() }, 'Split evenly (interest)');
+  const panel = h('div', { class: 'env-split', hidden: true }, rows, h('div', { class: 'env-split-foot' }, left, evenBtn));
+  const el = h('div', { class: 'env-field' }, h('label', { class: 'field' }, label, select), panel);
+
+  function build(initial) {
+    const ids = (initial ?? []).map((s) => s.envelopeId);
+    const shown = envelopeList(acct, { includeHidden: true }).filter((e) => !e.hidden || ids.includes(e.id));
+    label.textContent = `Envelope · ${acct.name}`;
+    select.replaceChildren(
+      ...shown.map((e) => h('option', { value: e.id }, e.hidden ? `${e.name} (hidden)` : e.name)),
+      h('option', { value: '' }, 'Unallocated — choose later'),
+      allowSplit ? h('option', { value: '*split' }, 'Split between envelopes…') : null);
+    inputs = new Map();
+    rows.replaceChildren(...shown.map((e) => {
+      const inp = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input', placeholder: '0.00', dataset: { env: e.id } });
+      inp.addEventListener('input', updateLeft);
+      inputs.set(e.id, inp);
+      return h('label', { class: 'env-split-row' }, h('span', {}, e.name), inp);
+    }));
+    if (!initial?.length) select.value = '';
+    else if (initial.length === 1 || !allowSplit) select.value = initial[0].envelopeId;
+    else {
+      select.value = '*split';
+      for (const s of initial) { const inp = inputs.get(s.envelopeId); if (inp) inp.value = penceToInput(s.amount); }
+    }
+    sync();
+  }
+  function sync() {
+    panel.hidden = select.value !== '*split';
+    updateLeft();
+  }
+  function typedTotal() {
+    let total = 0;
+    for (const inp of inputs.values()) {
+      if (!inp.value.trim()) continue;
+      const p = parseAmount(inp.value);
+      if (p === null) return null;
+      total += p;
+    }
+    return total;
+  }
+  function updateLeft() {
+    if (panel.hidden) return;
+    const amt = getAmount();
+    const typed = typedTotal();
+    left.classList.remove('ok', 'off');
+    if (!amt) { left.textContent = 'Enter the amount first.'; return; }
+    if (typed === null) { left.textContent = 'Amounts should look like 12.34'; left.classList.add('off'); return; }
+    const diff = amt - typed;
+    if (diff === 0) { left.textContent = `✓ Adds up to ${formatPence(amt)}`; left.classList.add('ok'); }
+    else if (diff > 0) { left.textContent = `${formatPence(diff)} still to put in an envelope`; left.classList.add('off'); }
+    else { left.textContent = `${formatPence(-diff)} too much`; left.classList.add('off'); }
+  }
+  function fillEvenly() {
+    const amt = getAmount();
+    if (!amt) return toast('Enter the amount first', 'error');
+    const visible = envelopeList(acct).map((e) => e.id);
+    const even = new Map(splitEvenly(amt, visible).map((s) => [s.envelopeId, s.amount]));
+    for (const [id, inp] of inputs) inp.value = even.has(id) ? penceToInput(even.get(id)) : '';
+    updateLeft();
+  }
+  select.addEventListener('change', () => {
+    // switching to Split with a single envelope chosen before: start from that
+    if (select.value === '*split' && typedTotal() === 0 && select.dataset.last && inputs.has(select.dataset.last) && getAmount()) {
+      inputs.get(select.dataset.last).value = penceToInput(getAmount());
+    }
+    if (select.value !== '*split') select.dataset.last = select.value;
+    sync();
+  });
+
+  return {
+    el,
+    get accountId() { return acct?.id ?? null; },
+    setAccount(account, initial = null, opts = {}) {
+      acct = account;
+      allowSplit = opts.allowSplit ?? true;
+      build(initial);
+      select.dataset.last = select.value === '*split' ? '' : select.value;
+    },
+    /** { splits } (null = Unallocated) or { error } */
+    value() {
+      const v = select.value;
+      if (v === '') return { splits: null };
+      if (v !== '*split') return { splits: [{ envelopeId: v, amount: getAmount() ?? 0 }] };
+      const out = [];
+      for (const [id, inp] of inputs) {
+        if (!inp.value.trim()) continue;
+        const p = parseAmount(inp.value);
+        if (p === null) return { error: 'Envelope amounts should look like 12.34' };
+        if (p > 0) out.push({ envelopeId: id, amount: p });
+      }
+      return { splits: out };
+    },
+    setSingle(id) {
+      if (![...select.options].some((o) => o.value === id)) return;
+      select.value = id;
+      select.dataset.last = id;
+      sync();
+    },
+    refresh: updateLeft,
+  };
+}
+
+/** Move money between envelopes (or edit/delete a move). Reuses the entry sheet. */
+function openMoveDialog({ accountId, txId = null, fromId, toId }) {
+  const dlg = $('txDialog');
+  const existing = txId ? state.ledger.transactions.find((t) => t.id === txId) : null;
+  const account = accountById(existing?.accountId ?? accountId);
+  if (!envelopeConfig(account)) return;
+  const al = existing ? allocationOf(existing, account) : null;
+  const bal = envelopeBalances(state.ledger, account, todayIso());
+  const balOf = (id) => (id === UNALLOCATED ? bal.unallocated : bal.byId[id] ?? 0);
+  const ids = [...envelopeList(account).map((e) => e.id), ''];
+  const option = (id, selected) => h('option', { value: id, selected: id === selected }, `${envelopeName(account, id || null)} · ${formatPence(balOf(id || null))}`);
+  const from = h('select', {}, ids.map((id) => option(id, existing ? al.from ?? '' : fromId ?? ids[0])));
+  const to = h('select', {}, ids.map((id) => option(id, existing ? al.to ?? '' : toId ?? ids[1] ?? '')));
+  const amount = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input big', placeholder: '0.00', value: existing ? penceToInput(al.amount) : '' });
+  const desc = h('input', { type: 'text', autocomplete: 'off', placeholder: 'e.g. Glasses — not enough in Health', value: existing?.description ?? '' });
+  const date = h('input', { type: 'date', required: true, value: existing?.date ?? todayIso() });
+  const s = institutionStyle(account.institution);
+  const form = h('form', {
+    method: 'dialog', class: 'sheet-body',
+    onsubmit: (e) => {
+      e.preventDefault();
+      const pence = parseAmount(amount.value);
+      if (pence === null) return toast('Enter an amount like 12.34', 'error');
+      const fields = { accountId: account.id, date: date.value, amount: pence, fromEnvelopeId: from.value || null, toEnvelopeId: to.value || null, description: desc.value };
+      const next = attempt(() => (existing ? updateEnvelopeMove(state.ledger, existing.id, fields) : addEnvelopeMove(state.ledger, fields)));
+      if (!next) return;
+      dlg.close();
+      commit(next, existing ? 'Move updated' : 'Moved');
+    },
+  },
+  h('header', { class: 'sheet-head', style: { '--acc': s.colour } },
+    swatch(account),
+    h('h2', {}, `${existing ? 'Edit move' : 'Move between envelopes'} · ${account.name}`),
+    h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
+  h('p', { class: 'muted small' }, 'Moves money from one envelope to another inside this account — the account’s balance doesn’t change.'),
+  h('div', { class: 'field-pair' },
+    h('label', { class: 'field' }, h('span', {}, 'From'), from),
+    h('label', { class: 'field' }, h('span', {}, 'To'), to)),
+  h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount),
+  h('label', { class: 'field' }, h('span', {}, 'Description'), desc),
+  h('label', { class: 'field' }, h('span', {}, 'Date'), date),
+  h('div', { class: 'sheet-actions' },
+    existing ? h('button', {
+      type: 'button', class: 'btn-danger',
+      onclick: () => {
+        if (!confirm('Delete this move?')) return;
+        dlg.close();
+        commit(deleteTransaction(state.ledger, existing.id), 'Deleted');
+      },
+    }, 'Delete') : h('span'),
+    h('button', { type: 'submit', class: 'btn-primary' }, existing ? 'Save' : 'Move')));
+  dlg.replaceChildren(form);
+  openDialog(dlg);
+  if (!existing) setTimeout(() => amount.focus(), 50);
+}
+
+/** Open the envelopes view for an account: all envelopes, or one envelope's history (null = Unallocated). */
+function openEnvelopeDialog(accountId, envelopeId) {
+  state.envView = { accountId, envelopeId };
+  renderEnvelopeDialog();
+  openDialog($('envelopeDialog'));
+}
+
+function renderEnvelopeDialog() {
+  const dlg = $('envelopeDialog');
+  const { accountId, envelopeId } = state.envView ?? {};
+  const account = accountById(accountId);
+  if (!envelopeConfig(account)) { if (dlg.open) dlg.close(); return; }
+  const today = todayIso();
+  const view = viewLedger();
+  const eomIso = endOfMonthIso(today);
+  const now = envelopeBalances(state.ledger, account, today);
+  const end = envelopeBalances(view, account, eomIso);
+  const waiting = unallocatedEntries(state.ledger, account);
+  const s = institutionStyle(account.institution);
+  const close = h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕');
+
+  if (envelopeId === undefined) {
+    const shown = envelopeList(account, { includeHidden: true }).filter((e) => !e.hidden || now.byId[e.id] || end.byId[e.id]);
+    const line = (id, name, a, b, extra = null, cls = '') => h('tr', { class: `clickable ${cls}`, onclick: () => { state.envView = { accountId, envelopeId: id }; renderEnvelopeDialog(); } },
+      h('td', {}, name, extra),
+      h('td', { class: `num ${a < 0 ? 'neg' : ''}` }, formatPence(a)),
+      h('td', { class: `num muted ${b < 0 ? 'neg' : ''}` }, formatPence(b)));
+    const table = h('table', { class: 'env-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Envelope'), h('th', { class: 'num' }, 'Today'), h('th', { class: 'num' }, `End of ${monthYearLabel(eomIso)}`))),
+      h('tbody', {},
+        shown.map((e) => line(e.id, e.hidden ? `${e.name} (hidden)` : e.name, now.byId[e.id], end.byId[e.id])),
+        line(UNALLOCATED, 'Unallocated', now.unallocated, end.unallocated,
+          waiting.length ? h('span', { class: 'env-waiting' }, ` · ${waiting.length} ${waiting.length === 1 ? 'entry' : 'entries'} to assign`) : null,
+          waiting.length || now.unallocated ? 'env-unalloc-row' : 'muted')),
+      h('tfoot', {}, h('tr', {}, h('td', {}, account.name), h('td', { class: 'num' }, formatPence(now.total)), h('td', { class: 'num muted' }, formatPence(end.total)))));
+    dlg.replaceChildren(h('div', { class: 'sheet-body' },
+      h('header', { class: 'sheet-head', style: { '--acc': s.colour } }, swatch(account), h('h2', {}, `Envelopes · ${account.name}`), close),
+      table,
+      h('p', { class: 'muted small' }, 'Click an envelope to see its entries with a running balance. Unallocated is money in the account not in any envelope — entries made before envelopes were set up start there.'),
+      h('div', { class: 'sheet-actions' },
+        h('button', { type: 'button', class: 'btn-secondary', onclick: () => openAccountDialog(account.id) }, 'Envelope settings…'),
+        h('button', { type: 'button', class: 'btn-primary', onclick: () => openMoveDialog({ accountId: account.id }) }, 'Move between envelopes…'))));
+    return;
+  }
+
+  // one envelope's own history, oldest first, like a column of the pots spreadsheet
+  const name = envelopeName(account, envelopeId);
+  const hist = envelopeHistory(view, account, envelopeId);
+  const list = h('ul', { class: 'env-hist' },
+    h('li', { class: 'env-hist-row muted' },
+      h('span', { class: 'env-hist-date' }, shortDate(account.openingDate)),
+      h('span', { class: 'env-hist-desc' }, 'Brought forward'),
+      h('span', { class: 'env-hist-amt' }, ''),
+      h('span', { class: 'env-hist-bal' }, formatPence(hist.opening))));
+  for (const { transaction: t, change, balance } of hist.rows) {
+    const p = t.isProjected ? t.projection : null;
+    const move = isEnvelopeMove(t);
+    const open = () => (p ? openOccurrenceDialog(p.itemId, p.period) : move ? openMoveDialog({ txId: t.id }) : openTxDialog({ txId: t.id }));
+    const split = !move && t.envelopeSplits?.length > 1 ? ` (part of ${formatPence(t.amount)})` : '';
+    list.append(h('li', {}, h('button', {
+      type: 'button', class: `env-hist-row ${t.date > today ? 'future' : ''} ${p ? 'projected' : ''} ${p?.skipped ? 'skipped' : ''}`,
+      dataset: { date: t.date }, onclick: open,
+    },
+      h('span', { class: 'env-hist-date' }, shortDate(t.date)),
+      h('span', { class: 'env-hist-desc' }, p ? '↻ ' : '', move ? '⇄ ' : '', t.description || '(no description)', h('span', { class: 'muted' }, split)),
+      h('span', { class: `env-hist-amt ${change > 0 ? 'credit' : ''}` }, `${change > 0 ? '+' : '−'}${formatPence(Math.abs(change))}`),
+      h('span', { class: `env-hist-bal ${balance < 0 ? 'neg' : ''}` }, p?.skipped ? 'skipped' : formatPence(balance)))));
+  }
+  const isUnalloc = envelopeId === UNALLOCATED;
+  dlg.replaceChildren(h('div', { class: 'sheet-body' },
+    h('header', { class: 'sheet-head', style: { '--acc': s.colour } },
+      h('button', { type: 'button', class: 'btn-ghost env-back', onclick: () => { state.envView = { accountId, envelopeId: undefined }; renderEnvelopeDialog(); } }, '‹ All'),
+      h('h2', {}, name), close),
+    h('div', { class: 'recon-summary' },
+      h('div', { class: 'recon-line' }, h('span', {}, 'Today'), h('strong', { class: (isUnalloc ? now.unallocated : now.byId[envelopeId]) < 0 ? 'neg' : '' }, formatPence(isUnalloc ? now.unallocated : now.byId[envelopeId]))),
+      h('div', { class: 'recon-line muted' }, h('span', {}, `End of ${monthYearLabel(eomIso)}`), h('span', {}, formatPence(isUnalloc ? end.unallocated : end.byId[envelopeId])))),
+    isUnalloc && waiting.length ? h('p', { class: 'warn small' }, `${waiting.length} ${waiting.length === 1 ? 'entry is' : 'entries are'} not in an envelope yet — click one to choose its envelope.`) : null,
+    hist.rows.length ? list : h('p', { class: 'muted' }, 'Nothing in this envelope yet.'),
+    h('div', { class: 'sheet-actions' },
+      h('span'),
+      h('button', { type: 'button', class: 'btn-secondary', onclick: () => openMoveDialog({ accountId: account.id, fromId: isUnalloc ? '' : envelopeId }) }, 'Move from here…'))));
+  // land at today
+  requestAnimationFrame(() => {
+    const rowsUpToToday = [...list.querySelectorAll('.env-hist-row[data-date]')].filter((r) => r.dataset.date <= today);
+    rowsUpToToday.pop()?.scrollIntoView({ block: 'center' });
+  });
+}
+
+/** Envelope balances under an account header (grid) — click for the breakdown. */
+function envHeaderBlock(account, today) {
+  if (!envelopeConfig(account)) return null;
+  const b = envelopeBalances(state.ledger, account, today);
+  const waiting = unallocatedEntries(state.ledger, account).length;
+  return h('button', { type: 'button', class: 'acc-env', title: 'Envelopes — click for each one’s entries', onclick: () => openEnvelopeDialog(account.id) },
+    envelopeList(account).map((e) => h('span', { class: 'acc-env-line' },
+      h('span', { class: 'acc-env-name' }, e.name), h('span', { class: `acc-env-amt ${b.byId[e.id] < 0 ? 'neg' : ''}` }, formatPence(b.byId[e.id])))),
+    b.unallocated || waiting ? h('span', { class: 'acc-env-line env-unalloc' },
+      h('span', { class: 'acc-env-name' }, waiting ? `Unallocated (${waiting} to assign)` : 'Unallocated'),
+      h('span', { class: 'acc-env-amt' }, formatPence(b.unallocated))) : null);
+}
+
+/** Envelope chips in the phone banner — tap for the breakdown. */
+function envBannerBlock(account, today) {
+  if (!envelopeConfig(account)) return null;
+  const b = envelopeBalances(state.ledger, account, today);
+  const waiting = unallocatedEntries(state.ledger, account).length;
+  return h('div', { class: 'banner-env' },
+    envelopeList(account).map((e) => h('button', { type: 'button', class: 'env-chip', onclick: () => openEnvelopeDialog(account.id, e.id) },
+      h('span', {}, e.name), h('strong', {}, formatPence(b.byId[e.id])))),
+    b.unallocated || waiting ? h('button', { type: 'button', class: 'env-chip env-chip-unalloc', onclick: () => openEnvelopeDialog(account.id, UNALLOCATED) },
+      h('span', {}, waiting ? `Unallocated · ${waiting} to assign` : 'Unallocated'), h('strong', {}, formatPence(b.unallocated))) : null,
+    h('button', { type: 'button', class: 'env-chip env-chip-more', onclick: () => openEnvelopeDialog(account.id) }, 'Envelopes ›'));
+}
+
+/** The envelopes part of the account dialog. */
+function envelopeSettings(existing) {
+  const inUse = existing ? envelopesInUse(state.ledger, existing.id) : new Set();
+  let rows = (existing?.envelopes?.list ?? []).map((e) => ({ ...e }));
+  const on = h('input', { type: 'checkbox', checked: Boolean(envelopeConfig(existing)) });
+  const list = h('div', { class: 'env-set-rows' });
+  const summary = h('div', { class: 'muted small env-set-summary' });
+  let openingInput = null; // the account's opening balance box, for the summary
+  const readSigned = (raw) => {
+    const t = raw.trim();
+    if (t === '') return 0;
+    const neg = t.startsWith('-');
+    const p = parseAmount(neg ? t.slice(1) : t);
+    return p === null ? null : neg ? -p : p;
+  };
+  function readRows() {
+    for (const row of list.querySelectorAll('.env-set-row')) {
+      const r = rows.find((x) => x.id === row.dataset.id);
+      if (!r) continue;
+      r.name = row.querySelector('.env-set-name').value;
+      r.openingText = row.querySelector('.env-set-open').value;
+      r.hidden = row.querySelector('.env-set-hide')?.checked ?? false;
+    }
+  }
+  function draw() {
+    list.replaceChildren(...rows.map((r, i) => {
+      const used = inUse.has(r.id);
+      const name = h('input', { type: 'text', class: 'env-set-name', value: r.name ?? '', placeholder: 'e.g. Transport', 'aria-label': 'Envelope name' });
+      const open = h('input', { type: 'text', inputmode: 'decimal', class: 'amount-input env-set-open', 'aria-label': `Opening amount for ${r.name || 'this envelope'}`, placeholder: '0.00', value: r.openingText ?? (r.openingBalance ? penceToInput(r.openingBalance) : '') });
+      open.addEventListener('input', updateSummary);
+      return h('div', { class: 'env-set-row', dataset: { id: r.id } },
+        name, open,
+        h('button', { type: 'button', class: 'btn-ghost icon-btn', title: 'Move up', disabled: i === 0, onclick: () => { readRows(); [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; draw(); } }, '↑'),
+        used
+          ? h('label', { class: 'check env-set-hidecheck', title: 'Has entries — hide it instead of removing it' }, h('input', { type: 'checkbox', class: 'env-set-hide', checked: Boolean(r.hidden) }), h('span', {}, 'Hide'))
+          : h('button', { type: 'button', class: 'btn-ghost icon-btn', title: 'Remove', 'aria-label': `Remove ${r.name || 'envelope'}`, onclick: () => { readRows(); rows.splice(i, 1); draw(); } }, '✕'));
+    }));
+    updateSummary();
+  }
+  function updateSummary() {
+    readRows();
+    const opening = openingInput ? readSigned(openingInput.value) : existing?.openingBalance ?? 0;
+    const inEnv = rows.reduce((s, r) => s + (readSigned(r.openingText ?? (r.openingBalance ? penceToInput(r.openingBalance) : '')) ?? 0), 0);
+    summary.textContent = opening === null ? '' : `Opening balance ${formatPence(opening)} · in envelopes ${formatPence(inEnv)} · Unallocated ${formatPence(opening - inEnv)}`;
+  }
+  const body = h('div', { class: 'env-set-body' },
+    h('div', { class: 'env-set-head muted small' }, h('span', {}, 'Name'), h('span', {}, 'At opening date (£)')),
+    list,
+    h('button', { type: 'button', class: 'btn-secondary btn-small', onclick: () => { readRows(); rows.push({ id: newEnvelope('').id, name: '', openingBalance: 0, hidden: false }); draw(); list.querySelector('.env-set-row:last-child .env-set-name')?.focus(); } }, '+ Add envelope'),
+    summary,
+    h('div', { class: 'muted small' }, 'Each envelope’s share of the account on its opening date; anything not in an envelope is Unallocated. Entries already in the account start as Unallocated — choose their envelope from the Envelopes view. The first envelopes get the spare penny when interest is split evenly.'));
+  const syncOn = () => { body.hidden = !on.checked; if (on.checked && !rows.length) { rows.push({ id: newEnvelope('').id, name: '', openingBalance: 0, hidden: false }); draw(); } };
+  on.addEventListener('change', syncOn);
+  const el = h('fieldset', { class: 'stmt-settings env-settings' },
+    h('legend', {}, 'Envelopes'),
+    h('label', { class: 'check' }, on, h('span', {}, 'Split this account into envelopes (pots)')),
+    body);
+  draw();
+  syncOn();
+  return {
+    el,
+    watchOpening(input) { openingInput = input; input.addEventListener('input', updateSummary); updateSummary(); },
+    /** { envelopes } for updateAccount/addAccount, or { error } */
+    value() {
+      readRows();
+      const list2 = [];
+      for (const r of rows) {
+        const opening = readSigned(r.openingText ?? (r.openingBalance ? penceToInput(r.openingBalance) : ''));
+        if (opening === null) return { error: `Opening amount for ${r.name || 'an envelope'} should look like 123.45` };
+        if (!r.name.trim() && !opening && !inUse.has(r.id)) continue; // an empty row left over
+        list2.push({ id: r.id, name: r.name, openingBalance: opening, hidden: Boolean(r.hidden) });
+      }
+      if (!on.checked) return { envelopes: existing?.envelopes ? { enabled: false, list: list2 } : null };
+      return { envelopes: list2.length ? { enabled: true, list: list2 } : null };
+    },
+  };
+}
+
 // ------------------------------------------------------------------ account dialog
 
 function openAccountDialog(accountId) {
@@ -1726,6 +2199,8 @@ function openAccountDialog(accountId) {
   const openingLabel = h('span', {});
   const openingDate = h('input', { type: 'date', required: true, value: existing?.openingDate ?? firstOfMonthIso() });
   const hidden = h('input', { type: 'checkbox', checked: existing ? !existing.active : false });
+  const envSettings = envelopeSettings(existing); // v0.12
+  envSettings.watchOpening(opening);
 
   // Card statements (v0.7)
   const cc = existing?.creditCard ?? null;
@@ -1757,6 +2232,7 @@ function openAccountDialog(accountId) {
   const syncType = () => {
     openingLabel.textContent = type.value === 'credit' ? 'Amount owed at opening date (£)' : 'Opening balance (£)';
     stmtSection.hidden = type.value !== 'credit';
+    envSettings.el.hidden = type.value === 'credit';
   };
   type.addEventListener('change', syncType);
   syncType();
@@ -1781,6 +2257,10 @@ function openAccountDialog(accountId) {
           statementWorkingDay: wd,
           paymentDaysAfter: wd === null ? cc?.paymentDaysAfter ?? null : days,
         };
+      } else {
+        const env = envSettings.value();
+        if (env.error) return toast(env.error, 'error');
+        fields.envelopes = env.envelopes;
       }
       let next;
       if (existing) next = attempt(() => updateAccount(state.ledger, existing.id, { ...fields, name: fields.name.trim(), active: !hidden.checked }));
@@ -1806,6 +2286,7 @@ function openAccountDialog(accountId) {
     h('label', { class: 'field' }, openingLabel, opening),
     h('label', { class: 'field' }, h('span', {}, 'Opening date'), openingDate)),
   stmtSection,
+  envSettings.el,
   existing ? h('label', { class: 'check' }, hidden, h('span', {}, 'Hide this account (keeps its history)')) : null,
   h('div', { class: 'sheet-actions' },
     existing ? h('button', {
