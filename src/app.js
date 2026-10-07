@@ -52,7 +52,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.13.0';
+export const APP_VERSION = '0.13.1';
 
 const state = {
   ledger: null,
@@ -658,7 +658,7 @@ function renderList(accounts) {
   const bal = balanceAsOf(state.ledger, active, todayIsoStr);
   const eomIso = endOfMonthIso(todayIsoStr);
   const eomBal = balanceAsOf(view, active, eomIso);
-  const banner = h('section', { class: 'banner', style: { '--acc': style.colour } },
+  const banner = h('section', { class: 'banner', style: { '--acc': style.colour, '--ink': style.ink } },
     style.accent ? h('div', { class: 'banner-accent', style: { background: style.accent } }) : null,
     h('div', { class: 'banner-label' }, active.type === 'credit' ? 'Owed today' : 'Balance today'),
     h('div', { class: `banner-amount ${bal < 0 ? 'neg' : ''}` }, formatPence(bal)),
@@ -798,7 +798,7 @@ function renderGrid(accounts) {
     accounts.map((a) => {
       const s = institutionStyle(a.institution);
       const todayBal = balanceAsOf(state.ledger, a, today);
-      return h('th', { colspan: '3', class: 'acc-head', dataset: { accHead: a.id }, style: { '--acc': s.colour } },
+      return h('th', { colspan: '3', class: 'acc-head', dataset: { accHead: a.id }, style: { '--acc': s.colour, '--ink': s.ink } },
         h('div', { class: 'acc-bar', style: { background: s.colour } }, s.accent ? h('span', { class: 'acc-bar-accent', style: { background: s.accent } }) : null),
         h('div', { class: 'acc-title' },
           h('button', { type: 'button', class: 'btn-link acc-name', title: 'Edit account', onclick: () => openAccountDialog(a.id) }, a.name),

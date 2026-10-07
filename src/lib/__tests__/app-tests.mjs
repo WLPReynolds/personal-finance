@@ -17,6 +17,7 @@ import {
   counterpartOf,
 } from '../ops.js';
 import { buildGridRows } from '../grid.js';
+import { INSTITUTIONS, institutionStyle } from '../institutions.js';
 import { buildExport, parseImport } from '../transfer-file.js';
 
 let passed = 0;
@@ -205,6 +206,15 @@ test('matches accountBalances when the cutoff is after everything entered', () =
   let { ledger, current } = setup();
   ledger = addTransaction(ledger, { accountId: current.id, date: '2026-10-05', amount: 1500, direction: 'debit', description: 'Lottery' });
   assert.equal(balanceAsOf(ledger, current, '2099-12-31'), accountBalances(ledger)[current.id]);
+});
+
+test('institutions: Flex, Klarna and Very exist; ink defaults to white, Klarna is dark', () => {
+  for (const k of ['monzoflex', 'klarna', 'very']) assert.ok(INSTITUTIONS[k], k);
+  assert.equal(institutionStyle('monzoflex').accent, '#FF4D56');
+  assert.equal(institutionStyle('nationwide').ink, '#FFFFFF');
+  assert.equal(institutionStyle('klarna').colour, '#FFA8CD');
+  assert.equal(institutionStyle('klarna').ink, '#0B051D');
+  assert.equal(institutionStyle('nope').colour, INSTITUTIONS.other.colour);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

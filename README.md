@@ -4,11 +4,13 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.13.0 — Ticket purchases on the card
+## Status: v0.13.1 — Ticket purchases on the card (+ Monzo Flex, Klarna, Very institutions)
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**v0.13.1:** new institutions Monzo Flex (navy + coral stripe), Klarna (pink, dark text via new `ink` field) and Very (placeholder charcoal, no official hex found). Colours live in `src/lib/institutions.js`. Wealthify deliberately not added: market-valued, needs a balance-snapshot model, not transactions.
 
 **New in v0.13.0 — ticket purchases** (spec: Project doc `claude/ticket-purchases-spec.md`)
 - **⚙ → Ticket purchases → Show ticket purchases from the ticket tracker.**

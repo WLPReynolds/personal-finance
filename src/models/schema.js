@@ -21,7 +21,7 @@
  * @property {string} id                 - uuid
  * @property {string} name                - e.g. "Current Account", "Barclaycard"
  * @property {'current'|'savings'|'credit'} type
- * @property {string} institution         - e.g. "barclaycard", "nationwide", "mbna", "monzo", "chase", "other" — used to look up colour/branding
+ * @property {string} institution         - e.g. "barclaycard", "nationwide", "mbna", "monzo", "monzoflex", "chase", "klarna", "very", "other" — used to look up colour/branding
  * @property {number} openingBalance      - pence, as the user reads it: for 'credit' accounts this is the amount OWED (positive = you owe the card)
  * @property {string} openingDate         - ISO date the opening balance applies from ("brought forward" date)
  * @property {boolean} active             - false = hidden/closed but data retained
