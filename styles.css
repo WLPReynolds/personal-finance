@@ -289,6 +289,12 @@ body.mode-grid .topbar { position: static; }
 .toast-error { background: var(--danger); color: #fff; }
 body.mode-grid .toast { bottom: 24px; }
 
+/* ---- v0.13.2: page a version behind the code (half-arrived deploy) */
+.update-banner {
+  position: sticky; top: 0; z-index: 90; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px;
+  padding: 8px 16px; background: var(--warn-bg); color: var(--warn-text); font-weight: 600; font-size: 14px; text-align: center;
+}
+
 /* ---- recurring items: projected entries */
 .rec-icon { color: var(--primary); font-weight: 700; }
 .entry.projected { opacity: 0.62; font-style: italic; }

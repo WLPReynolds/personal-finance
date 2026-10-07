@@ -4,11 +4,13 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.13.1 — Ticket purchases on the card (+ Monzo Flex, Klarna, Very institutions)
+## Status: v0.13.2 — Ticket purchases on the card (+ Monzo Flex, Klarna, Very; stale-page fix)
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**v0.13.2:** a page a version behind the code (for a few minutes after a deploy) no longer breaks saving. Dialog checks are null-safe. "Couldn't save" now only appears when storing really failed; a screen-refresh problem after a good save says so and keeps the change. `index.html` carries a version stamp, and a mismatch shows a "Finishing an update — tap to reload" bar.
 
 **v0.13.1:** new institutions Monzo Flex (navy + coral stripe), Klarna (pink, dark text via new `ink` field) and Very (placeholder charcoal, no official hex found). Colours live in `src/lib/institutions.js`. Wealthify deliberately not added: market-valued, needs a balance-snapshot model, not transactions.
 
@@ -328,8 +330,10 @@ and (v0.7) **card statements**.
 ## Deploying (GitHub web UI)
 
 Upload the whole folder contents to the repo root (keep the `src/` and
-`icons/` folders), then enable Pages. When you change files, bump `VERSION`
-in `sw.js` and `APP_VERSION` in `src/app.js` — the service worker is
+`icons/` folders), then enable Pages. When you change files, bump the version
+in all four places — `VERSION` in `sw.js`, `APP_VERSION` in `src/app.js`,
+`package.json`, and `<meta name="app-version">` in `index.html`
+(`page-tests.mjs` checks they match) — the service worker is
 network-first, so an online reload always gets new files; the version bump
 just clears the old offline cache.
 
@@ -374,7 +378,7 @@ just clears the old offline cache.
 1. Excel import (SheetJS) — historical data; October 2026 onwards is being kept as entered
 3. A statement date that doesn't follow the card's rule one month (no override yet); Nationwide's statement rule
 4. Trip Mode, fuzzy search + archive, Export-to-Sheets
-5. Joint/shared ledger with Alison (sync engine is ready; `drive.file` means she opens the shared file once via Google's file picker)
+5. Joint/shared ledger with Alison — agreed plan in `JOINT-ACCOUNT-PLAN.md` (stage 1 Wayne-only, separate Drive folder; Cloudflare parked)
 7. Draggable grid columns, iOS install hint
 
 ## Running tests
@@ -383,5 +387,5 @@ just clears the old offline cache.
 npm test
 ```
 
-253 tests (incl. ticket purchases, envelopes, two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py`, `tickets_v013.py` (and the others in `dev/e2e/`).
+259 tests (incl. page/code consistency checks, ticket purchases, envelopes, two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py`, `tickets_v013.py`, `stale_page_v0132.py` (and the others in `dev/e2e/`).

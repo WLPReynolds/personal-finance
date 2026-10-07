@@ -52,7 +52,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.13.1';
+export const APP_VERSION = '0.13.2';
 
 const state = {
   ledger: null,
@@ -73,6 +73,9 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+/** v0.13.2: true if that dialog exists and is open. Null-safe, so a page that's
+ *  a version behind (missing a dialog) can't break a save or a refresh. */
+const isOpen = (id) => $(id)?.open === true;
 const app = $('app');
 const desktopQuery = matchMedia('(min-width: 900px)');
 
@@ -271,7 +274,7 @@ async function loadHolidays() {
     await saveBankHolidays({ dates, fetchedAt });
     const changed = applyHolidays(dates, fetchedAt);
     if (changed && state.ledger) render();
-    if ($('recurringDialog').open) renderRecurringManager();
+    if (isOpen('recurringDialog')) renderRecurringManager();
   } catch {
     /* offline or gov.uk unreachable — keep the list we have */
   }
@@ -374,9 +377,9 @@ async function checkTracker(token, { force = false } = {}) {
   try { await saveTrackerEstimates(rec); } catch { /* keeps working from memory this session */ }
   if (JSON.stringify([rec.estimates, rec.error]) !== before) {
     render();
-    if ($('recurringDialog').open) renderRecurringManager();
+    if (isOpen('recurringDialog')) renderRecurringManager();
   }
-  if ($('settingsDialog').open) renderSettings();
+  if (isOpen('settingsDialog')) renderSettings();
 }
 /** "Check now" (a tap — may open Google's window). */
 function checkTrackerFromTap() {
@@ -537,16 +540,27 @@ async function commit(nextLedger, message) {
   state.ledger = nextLedger;
   try {
     await saveLedger(nextLedger);
-    render();
-    if ($('envelopeDialog').open) renderEnvelopeDialog();
-    if (message) toast(message);
-    renderSyncChip();
-    scheduleSync();
   } catch (err) {
+    // Only a failure to STORE the data is "couldn't save" — and only then is
+    // the change taken back off the screen.
     state.ledger = previous;
-    render();
+    try { render(); } catch (e) { console.error(e); }
     toast(`Couldn't save: ${err.message}`, 'error');
+    return;
   }
+  // v0.13.2: saved. From here on a problem only affects the screen — the change
+  // stays (on screen and on the device) and still goes to Drive.
+  let screenError = null;
+  for (const step of [
+    () => render(),
+    () => { if (isOpen('envelopeDialog')) renderEnvelopeDialog(); },
+    () => renderSyncChip(),
+  ]) {
+    try { step(); } catch (err) { screenError ??= err; console.error(err); }
+  }
+  scheduleSync();
+  if (screenError) toast(`Saved — but the screen didn’t refresh properly (${screenError.message}). Reload the app.`, 'error');
+  else if (message) toast(message);
 }
 
 function attempt(fn) {
@@ -1965,8 +1979,8 @@ function openRecurringEditor(itemId) {
       if (!next) return;
       dlg.close();
       commit(next, existing ? 'Recurring item updated' : 'Recurring item added');
-      if ($('recurringDialog').open) renderRecurringManager();
-      if ($('settingsDialog').open) renderSettings();
+      if (isOpen('recurringDialog')) renderRecurringManager();
+      if (isOpen('settingsDialog')) renderSettings();
     },
   },
   h('header', { class: 'sheet-head' },
@@ -1997,8 +2011,8 @@ function openRecurringEditor(itemId) {
         if (!confirm(`Delete “${existing.description}”?\n\nIts projected entries disappear. Entries you’ve already confirmed stay as they are.`)) return;
         dlg.close();
         commit(deleteRecurring(state.ledger, existing.id), 'Recurring item deleted');
-        if ($('recurringDialog').open) renderRecurringManager();
-        if ($('settingsDialog').open) renderSettings();
+        if (isOpen('recurringDialog')) renderRecurringManager();
+        if (isOpen('settingsDialog')) renderSettings();
       },
     }, 'Delete') : h('span'),
     h('button', { type: 'submit', class: 'btn-primary' }, existing ? 'Save' : 'Add')));
@@ -2481,7 +2495,7 @@ function openAccountDialog(accountId) {
       if (!next) return;
       dlg.close();
       commit(next, existing ? 'Account updated' : 'Account added');
-      if ($('settingsDialog').open) renderSettings();
+      if (isOpen('settingsDialog')) renderSettings();
     },
   },
   h('header', { class: 'sheet-head' },
@@ -2506,7 +2520,7 @@ function openAccountDialog(accountId) {
         if (!next) return;
         dlg.close();
         commit(next, 'Account deleted');
-        if ($('settingsDialog').open) renderSettings();
+        if (isOpen('settingsDialog')) renderSettings();
       },
     }, txCount ? `Delete (has ${txCount} entries)` : 'Delete') : h('span'),
     h('button', { type: 'submit', class: 'btn-primary' }, existing ? 'Save' : 'Add account')));
@@ -2560,7 +2574,7 @@ function ticketSection() {
     const saved = commit(next, on.checked ? 'Ticket purchases saved' : 'Ticket purchases off'); // sets state.ledger straight away
     // read the tracker's file now — started synchronously from the tap, so Google's sign-in window is allowed (Android rule)
     if (turnedOn && sync.isEnabled()) checkTrackerFromTap();
-    saved.then(() => { if ($('settingsDialog').open) renderSettings(); });
+    saved.then(() => { if (isOpen('settingsDialog')) renderSettings(); });
   };
   return h('section', { class: 'settings-section', id: 'ticketSection' },
     h('h3', {}, 'Ticket purchases'), intro,
@@ -2618,7 +2632,7 @@ function renderSettings() {
           onclick: () => {
             // connect() must start Google's sign-in straight from this tap
             sync.connect().then((r) => {
-              if ($('settingsDialog').open) renderSettings();
+              if (isOpen('settingsDialog')) renderSettings();
               afterSync(r, true);
             });
           },
@@ -2803,7 +2817,7 @@ function openBackupsDialog() {
     const r = await sync.restoreBackup(backup);
     if (r.status === 'restored') {
       dlg.close();
-      if ($('settingsDialog').open) renderSettings();
+      if (isOpen('settingsDialog')) renderSettings();
       toast(r.pending ? 'Restored here — it reaches Drive on the next sync' : `Restored the backup from ${backupDayLabel(b)}`);
       if (r.conflicts) openConflictDialog();
       return;
@@ -2854,7 +2868,7 @@ async function doExport(share) {
   // element into the topmost open dialog, and renderSettings() wipes that
   // dialog's children via replaceChildren — doing it after would immediately
   // erase the toast we just showed.
-  if ($('settingsDialog').open) renderSettings();
+  if (isOpen('settingsDialog')) renderSettings();
   toast(message);
   render();
 }
@@ -2873,7 +2887,7 @@ async function doImport(file) {
     await saveMeta(state.meta);
     // keep the ledger's own lastModified so "unexported changes" starts clean
     await commit(parsed.ledger); // no message yet — see note in doExport about ordering
-    if ($('settingsDialog').open) renderSettings();
+    if (isOpen('settingsDialog')) renderSettings();
     toast(`Imported ${incoming} entries`);
   } catch (err) {
     toast(err.message, 'error');
@@ -3171,8 +3185,25 @@ function openLockDialog(mode) {
 
 $('lockBtn').addEventListener('click', () => lockNow());
 
+/**
+ * v0.13.2: after a deploy, GitHub Pages can serve the old index.html for a few
+ * minutes while the new .js files already arrive. index.html carries its own
+ * version; if it doesn't match the code, say so (with a reload button) rather
+ * than fail in odd ways. Built entirely here, so it works on any old page.
+ */
+function checkPageVersion() {
+  const pageVersion = document.querySelector('meta[name="app-version"]')?.content?.trim();
+  if (pageVersion === APP_VERSION) return;
+  if (document.getElementById('updateBanner')) return;
+  const bar = h('div', { id: 'updateBanner', class: 'update-banner', role: 'alert' },
+    h('span', {}, 'Finishing an update — this page is a version behind the app.'),
+    h('button', { type: 'button', class: 'btn-primary btn-small', onclick: () => location.reload() }, 'Tap to reload'));
+  document.body.prepend(bar);
+}
+
 async function start() {
   $('brandVersion').textContent = `v${APP_VERSION}`;
+  try { checkPageVersion(); } catch (err) { console.error(err); }
   let header = null;
   try {
     header = await loadVaultHeader();
