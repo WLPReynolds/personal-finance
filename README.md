@@ -4,11 +4,81 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.13.2 — Ticket purchases on the card (+ Monzo Flex, Klarna, Very; stale-page fix)
+## Status: v0.14.0 — the joint account, on its own Drive file (stage 1: Wayne only)
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
 and (v0.7) **card statements**.
+
+**New in v0.14.0 — joint account, stage 1** (design: `JOINT-STAGE1-DESIGN.md`)
+- **Off on every device until you turn it on: ⚙ → Joint account → Turn on.**
+  While it's off, the app does exactly what v0.13.2 did.
+- The first device to turn it on makes **My Drive/Finance Joint/joint.json**
+  and asks for the joint account's opening balance and date (defaults to your
+  own opening date, 1 Oct 2026). Any other device that turns it on finds
+  that file and takes its contents.
+- The **Joint account** (purple, people icon) is pinned as the first grid
+  column and the first phone tab. It takes entries and recurring items like
+  any other account (bills going out, a "From Alison" credit coming in).
+- **Kept apart from your own data**: its own file, folder, local copy, sync,
+  daily backups (My Drive/Finance Joint/backups) and clash dialog (titled
+  "Joint account"). Nothing joint is ever written to `personal.json`. A joint
+  sync problem shows on the joint status only.
+- **No transfers between your accounts and the joint account yet.** That's
+  v0.15.0 (linked transfers). Until then, enter money in and out on each side
+  as you do today. The app won't offer the joint account as the other side of
+  a transfer, and refuses to save one if it somehow gets there.
+- **The sync chip** has a small people-icon dot for the joint file: green =
+  synced, amber = waiting (tap to sync), red = clash or error. Tapping the
+  chip syncs both files and says how each went. One Google sign-in covers
+  both. On phones the dot takes the cloud icon's place, so the top bar keeps
+  its size.
+- ⚙ also has **Joint backups…**, **Download joint export** (a
+  `finance-joint-…json` file; Import puts it back into the joint account
+  only, never into yours) and **Turn off on this device** (it disappears from
+  the screen, and the Drive file and this device's copy stay; turning it back
+  on carries on where it left off). "Remove joint data from this device"
+  appears while it's off.
+- **Overdraft and credit limits, with warnings (never blocks).** Account… has
+  an **Arranged overdraft limit** (current, savings, joint) or a **Credit
+  limit** (cards). Saving anything (an entry, a transfer, a recurring item, a
+  confirmed month, a delete) that would take an account past a line, from
+  today to the end of what's shown, asks first, naming the first date and the
+  balance. "Cancel" keeps the form open. The lines:
+  - **overdrawn**, with no overdraft (red);
+  - **into the overdraft** (amber);
+  - **past the overdraft limit** (red);
+  - **over the credit limit** (red).
+
+  Only what the change itself makes worse is warned about. An account
+  already shown overdrawn isn't nagged about on every unrelated save. On
+  screen, the header (and the phone banner) says "⚠ Overdrawn from Tue, 20
+  Oct" and the like, and those balances are filled amber or red in the grid
+  and list (coloured text where the account didn't change on that row). "Show
+  3 more months" brings any new ones into view.
+- **Loan / credit account** (new account type). Shown as **"Owed £x"**.
+  Repayments in work as normal. **Money can't be transferred out of one**:
+  the choices are greyed out, and the app refuses, the one hard block.
+  Interest isn't worked out; add any charge or interest as an entry (the
+  buttons read "Charge / interest" and "Repayment"). It's stored as the
+  negative balance it always was, so an older version still shows the right
+  figure. To convert an account: Account… → Type → Loan / credit account. The
+  figure flips to the amount owed and no amounts change. This is refused if
+  anything already transfers money out of it.
+- **Phone Summary page.** In the list view the app opens on **Summary**,
+  the first tab. It shows each visible account's header card (balance today,
+  end of month, statement line, limit warning, envelope chips) under its
+  name. Tap a card for that account; the Summary tab or a swipe right from the
+  first account goes back. There's no + on Summary. ⚙ → Layout → "In the
+  list (phone), open on: Summary / First account". The desktop grid is
+  unchanged.
+- **Fix: grid header when scrolled.** The Credit/Debit/Balance row now
+  stays tucked under the account headers when you scroll. It used to sit
+  a line too high when a card's statement line or the envelope balances made
+  the headers taller than usual.
+- With the passphrase lock on, the joint records are encrypted like the
+  rest. Erase all data turns the joint account off and removes its local copy
+  (the Drive file is kept).
 
 **v0.13.2:** a page a version behind the code (for a few minutes after a deploy) no longer breaks saving. Dialog checks are null-safe. "Couldn't save" now only appears when storing really failed; a screen-refresh problem after a good save says so and keeps the change. `index.html` carries a version stamp, and a mismatch shows a "Finishing an update — tap to reload" bar.
 
@@ -344,6 +414,9 @@ just clears the old offline cache.
 - `src/store.js` — IndexedDB load/save (ledger, meta, sync state); encrypts every record while the passphrase lock is on (v0.10)
 - `src/lib/vault.js` — passphrase lock: key derivation, key wrapping, value encryption (v0.10)
 - `src/lib/tracker-estimates.js` — the ticket tracker's published figures: file checks, lookup by month, reading from Drive (v0.11); the ticket list (v0.13)
+- `src/lib/joint.js` — joint account (v0.14): its own ledger; combine personal + joint for display, split every change back to the file that owns it, refuse anything that would link the two
+- `src/lib/limits.js` — v0.14 overdraft/credit limits: which line a balance has crossed, problems over a date range, which ones a change creates, the loan transfer-out block
+- `src/lib/shared-auth.js` — one Google sign-in request shared by the personal and joint sync engines (v0.14)
 - `src/lib/tickets.js` — ticket purchases: settings, projected tickets, confirm, ring-fence, money back before the card payment (v0.13)
 - `src/google-auth.js` — Google sign-in (GIS token client; tap-only)
 - `src/drive.js` — Drive REST adapter (find/create folder+file, download, save)
@@ -378,7 +451,7 @@ just clears the old offline cache.
 1. Excel import (SheetJS) — historical data; October 2026 onwards is being kept as entered
 3. A statement date that doesn't follow the card's rule one month (no override yet); Nationwide's statement rule
 4. Trip Mode, fuzzy search + archive, Export-to-Sheets
-5. Joint/shared ledger with Alison — agreed plan in `JOINT-ACCOUNT-PLAN.md` (stage 1 Wayne-only, separate Drive folder; Cloudflare parked)
+5. Joint account: linked transfers between your accounts and the joint account (v0.15.0, design §5); then stage 2, Alison joining (`JOINT-ACCOUNT-PLAN.md`; Cloudflare parked)
 7. Draggable grid columns, iOS install hint
 
 ## Running tests
@@ -387,5 +460,5 @@ just clears the old offline cache.
 npm test
 ```
 
-259 tests (incl. page/code consistency checks, ticket purchases, envelopes, two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py`, `tickets_v013.py`, `stale_page_v0132.py` (and the others in `dev/e2e/`).
+316 tests (incl. limits and loan accounts, older versions keeping newer fields (compat), joint account split/sync, page/code consistency checks, ticket purchases, envelopes, two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py`, `tickets_v013.py`, `stale_page_v0132.py`, `joint_v014.py`, `limits_v014.py`, `summary_v014.py`, `grid_header_v014.py` (and the others in `dev/e2e/`).

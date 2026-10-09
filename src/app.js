@@ -8,6 +8,7 @@ import {
   loadLedger, saveLedger, loadMeta, saveMeta, loadSyncState, saveSyncState, loadBankHolidays, saveBankHolidays, requestPersistence,
   loadVaultHeader, saveVaultHeader, setVaultKey, rekeyAll, wipeDevice, flushWrites, loadAuthCache, saveAuthCache,
   loadTrackerEstimates, saveTrackerEstimates,
+  loadJointLedger, saveJointLedger, loadJointSyncState, saveJointSyncState, loadJointSettings, saveJointSettings, removeJointData,
 } from './store.js';
 import {
   createVault, unlockVault, changePassphrase, passphraseProblem, isVaultHeader, AUTO_LOCK_CHOICES, DEFAULT_AUTO_LOCK, MIN_PASSPHRASE_LENGTH,
@@ -15,11 +16,16 @@ import {
 import { googleAuth } from './google-auth.js';
 import { googleDrive } from './drive.js';
 import { createSyncEngine } from './lib/sync-engine.js';
+import { shareTokenRequests } from './lib/shared-auth.js';
+import {
+  JOINT_FOLDER_NAME, JOINT_FILE_NAME, emptyJointLedger, isJointLedger, addJointAccount, combineLedgers, splitLedger,
+} from './lib/joint.js';
 import {
   emptyLedger, addAccount, updateAccount, deleteAccount, moveAccount,
   addTransaction, updateTransaction, deleteTransaction, setStatementMonth,
-  accountRunning, balanceAsOf, counterpartOf, setEnvelopeSplits, addEnvelopeMove, updateEnvelopeMove,
+  accountRunning, balanceAsOf, counterpartOf, setEnvelopeSplits, addEnvelopeMove, updateEnvelopeMove, displayOpening,
 } from './lib/ops.js';
+import { isLoan, showsOwed, balanceLevel, balanceProblems, newLimitProblems, LEVELS } from './lib/limits.js';
 import {
   UNALLOCATED, envelopeConfig, envelopeList, envelopeName, newEnvelope, envelopesInUse, splitEvenly,
   envelopeBalances, envelopeHistory, allocationOf, unallocatedEntries, isEnvelopeMove,
@@ -52,13 +58,23 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.13.2';
+export const APP_VERSION = '0.14.0';
 
 const state = {
+  // v0.14: `ledger` is what every screen draws from. With the joint account
+  // on it is personal + joint COMBINED (lib/joint.js) and never saved as such;
+  // `personal` and `joint` are the two real ledgers, each saved and synced on
+  // its own. With it off, `joint` is null and `ledger` is simply `personal`.
   ledger: null,
+  personal: null,
+  joint: null,
+  jointSettings: { enabled: false }, // this device's switch (never synced)
   meta: {},
   activeAccountId: null,
   viewMode: readPref('viewMode', 'auto'), // 'auto' | 'list' | 'grid'
+  // v0.14: on the phone the app opens on the Summary (every account's header card), unless ⚙ says "First account"
+  phoneLanding: readPref('phoneLanding', 'summary'), // 'summary' | 'account'
+  summary: readPref('phoneLanding', 'summary') === 'summary',
   gridScroll: null,
   listScrollToToday: true, // phone list: jump to today on open / account switch, not on every redraw
   installPrompt: null,
@@ -181,6 +197,19 @@ function toast(message, kind = 'ok') {
 function accountById(id) {
   return state.ledger.accounts.find((a) => a.id === id);
 }
+/** v0.14: rebuild the display ledger after either real ledger changes. */
+function recombine() {
+  state.ledger = state.joint ? combineLedgers(state.personal, state.joint) : state.personal;
+}
+function jointIds() {
+  return new Set(state.joint?.accounts.map((a) => a.id) ?? []);
+}
+const isJointAccount = (a) => Boolean(a && state.joint?.accounts.some((j) => j.id === a.id));
+/** Accounts an entry on `accountId` may be linked with: v0.14 keeps the two files apart. */
+function sameFileAccounts(accountId) {
+  const ids = jointIds();
+  return state.ledger.accounts.filter((a) => ids.has(a.id) === ids.has(accountId));
+}
 function visibleAccounts() {
   return state.ledger.accounts.filter((a) => a.active);
 }
@@ -191,18 +220,67 @@ function isGrid() {
 }
 function swatch(account, extra = '') {
   const s = institutionStyle(account.institution);
-  return h('span', { class: `swatch ${extra}`, style: { background: s.colour } },
+  const el = h('span', { class: `swatch ${extra} ${s.icon ? 'swatch-icon' : ''}`, style: { background: s.colour, color: s.ink ?? '#fff' } },
     s.accent ? h('span', { class: 'swatch-accent', style: { background: s.accent } }) : null);
+  if (s.icon === 'people') el.innerHTML = PEOPLE_SVG(10); // v0.14 joint account
+  return el;
 }
 function directionWords(account) {
+  if (isLoan(account)) return { debit: 'Charge / interest', credit: 'Repayment' }; // v0.14
   return account.type === 'credit'
     ? { debit: 'Spend', credit: 'Payment / refund' }
     : { debit: 'Money out', credit: 'Money in' };
 }
+
+// ------------------------------------------------------------------ v0.14 limits: overdraft, credit limit
+
+/** CSS class for a balance past one of the account's lines: amber = into the overdraft, red = the rest. */
+function limitClass(account, display) {
+  const level = balanceLevel(account, display);
+  return !level ? '' : level === 'overdraft' ? 'lim-warn' : 'lim-alert';
+}
+function dayText(iso) {
+  return iso === todayIso() ? 'today' : new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+function limitLine(p) {
+  const n = p.account.name;
+  const when = dayText(p.date);
+  if (p.level === 'overdrawn') return `${n} goes overdrawn ${when === 'today' ? 'today' : `on ${when}`}: ${formatPence(p.balance)}.`;
+  if (p.level === 'overdraft') return `${n} goes into its overdraft ${when === 'today' ? 'today' : `on ${when}`}: ${formatPence(p.balance)} (limit ${formatPence(p.limit)}).`;
+  if (p.level === 'past-overdraft') return `${n} goes PAST its ${formatPence(p.limit)} overdraft limit ${when === 'today' ? 'today' : `on ${when}`}: ${formatPence(p.balance)}.`;
+  return `${n} goes OVER its ${formatPence(p.limit)} credit limit ${when === 'today' ? 'today' : `on ${when}`}: ${formatPence(p.balance)} owed.`;
+}
+/**
+ * Before saving `next`: if it takes an account past a line (from today up to
+ * the furthest date the screen shows), ask first. A warning, never a block.
+ * @returns {boolean} true = go ahead
+ */
+function limitsOK(next) {
+  try {
+    const to = projectionEnd();
+    const before = withProjections(state.ledger, to, state.holidays, sources());
+    const after = withProjections(next, to, state.holidays, sources());
+    const problems = newLimitProblems(before, after, todayIso(), to);
+    if (!problems.length) return true;
+    return confirm(`⚠ ${problems.map(limitLine).join('\n⚠ ')}\n\n(Checked to ${longDate(to)} — as far ahead as the screen shows.)\n\nSave anyway?`);
+  } catch (err) {
+    console.error(err); // a problem working out the warning must never stop a save
+    return true;
+  }
+}
+/** Header line: when an account first crosses each line it reaches (today → the end of what's shown). */
+function limitHeaderText(account, view) {
+  const pr = balanceProblems(view, account, todayIso(), projectionEnd());
+  if (!pr) return null;
+  const words = { overdraft: 'Into overdraft', overdrawn: 'Overdrawn', 'past-overdraft': 'Past overdraft limit', 'over-credit-limit': 'Over credit limit' };
+  const parts = Object.entries(pr.first).sort((a, b) => a[1].date.localeCompare(b[1].date))
+    .map(([lvl, p]) => `${words[lvl]} ${p.date === todayIso() ? 'today' : `from ${dayText(p.date)}`}`);
+  return { text: `⚠ ${parts.join(' · ')}`, cls: pr.worst === 'overdraft' ? 'lim-warn' : 'lim-alert' };
+}
 function hasUnexported() {
-  if (!state.ledger) return false;
+  if (!state.personal) return false;
   const marker = [state.meta.lastExportAt, state.meta.lastImportAt].filter(Boolean).sort().pop();
-  return state.ledger.transactions.length > 0 && (!marker || state.ledger.lastModified > marker);
+  return state.personal.transactions.length > 0 && (!marker || state.personal.lastModified > marker);
 }
 
 // ------------------------------------------------------------------ recurring items: projections & bank holidays
@@ -341,16 +419,18 @@ function holidayStatusText() {
 // Test builds can inject a fake Google/Drive (see the browser tests); the
 // real app always uses Google's.
 const testHooks = window.__FT_TEST__ ?? null;
-const auth = testHooks?.auth ?? googleAuth;
+// v0.14: both engines share one sign-in request (lib/shared-auth.js)
+const auth = shareTokenRequests(testHooks?.auth ?? googleAuth);
 const syncDrive = testHooks?.drive ?? googleDrive;
 const sync = createSyncEngine({
   auth,
   drive: syncDrive,
   store: {
-    getLocal: () => state.ledger,
+    getLocal: () => state.personal,
     setLocal(ledger) {
       // a sync brought in changes from the other device
-      state.ledger = ledger;
+      state.personal = ledger;
+      recombine();
       saveLedger(ledger).catch((err) => toast(`Couldn't save synced data: ${err.message}`, 'error'));
       render();
     },
@@ -359,6 +439,39 @@ const sync = createSyncEngine({
   },
   afterSync: (token) => checkTracker(token),
 });
+
+// ---- v0.14 joint account: its own engine on its own file. Created only
+// while the switch is on; with it off, none of this runs.
+let jointSync = null;
+function makeJointEngine() {
+  const engine = createSyncEngine({
+    auth,
+    drive: syncDrive,
+    folderName: JOINT_FOLDER_NAME,
+    fileName: JOINT_FILE_NAME,
+    store: {
+      getLocal: () => state.joint,
+      setLocal(ledger) {
+        if (!state.jointSettings.enabled) return; // switched off mid-sync: leave the screen alone
+        state.joint = ledger;
+        recombine();
+        saveJointLedger(ledger).catch((err) => toast(`Couldn't save the joint account’s synced data: ${err.message}`, 'error'));
+        render();
+        if (isOpen('settingsDialog')) renderSettings();
+      },
+      loadSyncState: loadJointSyncState,
+      saveSyncState: saveJointSyncState,
+    },
+  });
+  engine.onChange(renderSyncChip);
+  return engine;
+}
+const jointActive = () => Boolean(state.jointSettings.enabled && jointSync);
+/** A joint sync never throws into the personal one, and never blocks it. */
+function runJointSync(opts) {
+  if (!jointActive()) return Promise.resolve(null);
+  return jointSync.sync(opts).catch((err) => { console.error(err); return { status: 'error' }; });
+}
 
 // ------------------------------------------------------------------ v0.11 ticket tracker figures
 
@@ -403,21 +516,54 @@ function trackerStatusText() {
 let syncTimer = null;
 /** Sync shortly after an edit, if signed in (never opens Google's window). */
 function scheduleSync(delay = 4000) {
-  if (!sync.isEnabled()) return;
+  if (!sync.isEnabled() && !jointActive()) return;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => sync.sync().then(afterSync), delay);
+  syncTimer = setTimeout(syncBoth, delay);
+}
+/** Background sync of both files (never opens Google's window). Joint runs on its own; its problems stay on its own status. */
+function syncBoth() {
+  const personal = sync.sync().then(afterSync);
+  runJointSync().then((r) => afterJointSync(r));
+  return personal;
 }
 
 /** Tap-driven sync: the only path that may open Google's sign-in window. */
 function syncFromTap() {
   const st = sync.getState();
-  if (st.status === 'conflicts') { openConflictDialog(); return; }
-  sync.sync({ interactive: true }).then((r) => afterSync(r, true));
+  if (st.status === 'conflicts') { openConflictDialog(sync); return; }
+  if (jointActive() && jointSync.getState().status === 'conflicts') { openConflictDialog(jointSync); return; }
+  // Both start right here in the tap; they share one sign-in request.
+  const personal = sync.sync({ interactive: true });
+  if (!jointActive()) { personal.then((r) => afterSync(r, true)); return; }
+  const joint = runJointSync({ interactive: true });
+  Promise.all([personal, joint]).then(([p, j]) => afterBothFromTap(p, j));
+}
+
+/** v0.14: what one file's sync came to, in a few words. */
+function syncResultText(result, engine) {
+  switch (result?.status) {
+    case 'pushed': case 'merged': case 'unchanged': case 'pulled': return 'synced';
+    case 'off': return 'sync is off';
+    case 'needs-tap': return auth.lastAuthError?.() ?? 'sign-in didn’t complete';
+    case 'conflicts': return 'a clash to sort out';
+    case 'error': return engine.getState().lastError ?? 'failed';
+    default: return result?.status ?? 'not synced';
+  }
+}
+function afterBothFromTap(p, j) {
+  if (p?.status === 'conflicts') { openConflictDialog(sync); return; }
+  if (j?.status === 'conflicts') { openConflictDialog(jointSync); return; }
+  const bad = (r) => r && ['needs-tap', 'error'].includes(r.status);
+  const text = `Personal: ${syncResultText(p, sync)} · Joint: ${syncResultText(j, jointSync)}`;
+  toast(text, bad(p) || bad(j) ? 'error' : 'ok');
+}
+function afterJointSync(result, fromTap = false) {
+  if (result?.status === 'conflicts' && (fromTap || !document.querySelector('dialog[open]'))) openConflictDialog(jointSync);
 }
 
 function afterSync(result, fromTap = false) {
   if (!result) return;
-  if (result.status === 'conflicts') { if (fromTap || !document.querySelector('dialog[open]')) openConflictDialog(); return; }
+  if (result.status === 'conflicts') { if (fromTap || !document.querySelector('dialog[open]')) openConflictDialog(sync); return; }
   if (!fromTap) return;
   if (result.status === 'needs-tap') toast(auth.lastAuthError?.() ?? "Google sign-in didn't complete", 'error');
   else if (result.status === 'error') toast(sync.getState().lastError ?? 'Sync failed', 'error');
@@ -446,20 +592,67 @@ function syncChipModel(st) {
   }
 }
 
+/** v0.14: the joint file's state as a coloured people-icon dot on the chip. */
+function jointDotModel(st) {
+  if (st.status === 'conflicts') return { kind: 'red', text: 'a clash to sort out' };
+  if (st.status === 'error') return { kind: 'red', text: st.lastError ?? 'sync failed' };
+  if (st.status === 'syncing') return { kind: 'busy', text: 'syncing' };
+  if (!st.enabled) return { kind: 'amber', text: 'not connected' };
+  if (!st.hasToken || st.status === 'needs-tap') return { kind: 'amber', text: st.dirty ? 'changes waiting — tap to sync' : 'tap to sync' };
+  if (st.dirty) return { kind: 'amber', text: 'syncing soon' };
+  return { kind: 'green', text: `synced ${syncTime(st.lastSyncAt)}` };
+}
+
 function renderSyncChip() {
   const chip = $('syncChip');
-  const model = syncChipModel(sync.getState());
+  const jst = jointActive() ? jointSync.getState() : null;
+  let model = syncChipModel(sync.getState());
+  if (!model && jst) model = syncChipModel({ ...jst, enabled: true }); // personal sync off, joint on
+  if (jst?.status === 'conflicts') model = { label: 'Check clash', kind: 'warn' };
   $('unexportedDot').hidden = sync.isEnabled() || !hasUnexported();
   chip.hidden = !model;
   if (!model) return;
-  chip.className = `sync-chip sync-${model.kind}`;
+  chip.className = `sync-chip sync-${model.kind}${jst ? ' has-joint' : ''}`;
   // static icon markup (no user data), so innerHTML is safe here
   chip.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96Z"/></svg>';
-  chip.append(h('span', { class: 'sync-label' }, model.label));
+  // v0.14: "Synced" is a separate word so the narrowest phones can drop it when the joint dot shows
+  const synced = /^Synced /.test(model.label);
+  chip.append(h('span', { class: 'sync-label' }, synced ? [h('span', { class: 'sync-word' }, 'Synced '), model.label.slice(7)] : model.label));
   if (model.dot) chip.append(h('span', { class: 'sync-dot', 'aria-hidden': 'true' }));
-  chip.setAttribute('aria-label', `Google Drive sync: ${model.label}`);
+  let aria = `Google Drive sync: ${model.label}`;
+  if (jst) {
+    const d = jointDotModel(jst);
+    const dot = h('span', { class: `sync-joint sync-joint-${d.kind}`, title: `Joint account: ${d.text}` });
+    dot.innerHTML = PEOPLE_SVG(12);
+    chip.append(dot);
+    aria += `. Joint account: ${d.text}`;
+  }
+  chip.setAttribute('aria-label', aria);
   const line = $('driveStatusLine');
   if (line) line.textContent = driveStatusText();
+  const jline = $('jointStatusLine');
+  if (jline) jline.textContent = jointStatusText();
+}
+
+/** v0.14: people icon (static markup) for the joint account. */
+function PEOPLE_SVG(size = 14) {
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3Zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5Z"/></svg>`;
+}
+function peopleIcon(size = 14, cls = 'people-icon') {
+  const el = h('span', { class: cls, 'aria-hidden': 'true' });
+  el.innerHTML = PEOPLE_SVG(size);
+  return el;
+}
+
+function jointStatusText() {
+  if (!jointActive()) return '';
+  const st = jointSync.getState();
+  const parts = [st.lastSyncAt ? `Last synced ${when(st.lastSyncAt)}` : 'Not synced yet'];
+  if (st.status === 'error' && st.lastError) parts.push(st.lastError);
+  else if (st.status === 'conflicts') parts.push('a clash to sort out — tap the cloud button');
+  else if (st.dirty) parts.push('changes on this device waiting to sync');
+  if (!st.hasToken) parts.push('sign-in expired — tap the cloud button to continue');
+  return parts.join(' · ');
 }
 
 function driveStatusText() {
@@ -479,7 +672,7 @@ function describeRecord(group, side) {
   if (records.every((r) => r === null)) return 'Deleted';
   const r = records.find((x) => x?.direction === 'debit') ?? records.find(Boolean);
   if (group.entityType === 'account') {
-    return `${r.name} · ${r.type === 'credit' ? 'owed' : 'opening'} ${formatPence(r.openingBalance)} from ${shortDate(r.openingDate)}${r.active ? '' : ' (hidden)'}`;
+    return `${r.name} · ${showsOwed(r) ? 'owed' : 'opening'} ${formatPence(displayOpening(r))} from ${shortDate(r.openingDate)}${r.active ? '' : ' (hidden)'}`;
   }
   if (group.entityType === 'transaction') {
     const name = (id) => accountById(id)?.name ?? 'account';
@@ -498,8 +691,9 @@ function describeRecord(group, side) {
   return r.name ?? 'Recurring item';
 }
 
-function openConflictDialog() {
-  const st = sync.getState();
+function openConflictDialog(engine = sync) {
+  const st = engine.getState();
+  const isJoint = engine === jointSync && engine !== null;
   const groups = st.conflicts;
   if (!groups?.length) return;
   const dlg = $('conflictDialog');
@@ -516,7 +710,7 @@ function openConflictDialog() {
   });
   dlg.replaceChildren(h('div', { class: 'sheet-body' },
     h('header', { class: 'sheet-head' },
-      h('h2', {}, groups.length === 1 ? 'One change clashes' : `${groups.length} changes clash`),
+      h('h2', {}, isJoint ? peopleIcon(18) : null, `${isJoint ? 'Joint account: ' : ''}${groups.length === 1 ? 'one change clashes' : `${groups.length} changes clash`}`.replace(/^./, (c) => c.toUpperCase())),
       h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
     h('p', { class: 'muted small' }, 'These were changed differently on this device and on another device since they last synced. Everything else has already been combined. Choose which version to keep:'),
     cards,
@@ -526,7 +720,7 @@ function openConflictDialog() {
         type: 'button', class: 'btn-primary',
         onclick: async () => {
           dlg.close();
-          const r = await sync.resolveConflicts(choices);
+          const r = await engine.resolveConflicts(choices);
           toast(r?.status === 'needs-tap' ? 'Saved here — tap the sync button to send to Drive' : 'Clash resolved');
         },
       }, 'Keep these'))));
@@ -535,19 +729,49 @@ function openConflictDialog() {
 
 // ------------------------------------------------------------------ commit
 
+/**
+ * Save a change made to the display ledger. v0.14: with the joint account on,
+ * it is split back into the personal and joint ledgers (lib/joint.js) and
+ * only a ledger that really changed is saved. A change that would link the two
+ * files is refused before anything is stored.
+ */
 async function commit(nextLedger, message) {
-  const previous = state.ledger;
-  state.ledger = nextLedger;
+  let parts;
   try {
-    await saveLedger(nextLedger);
+    parts = state.joint
+      ? splitLedger(nextLedger, { personal: state.personal, joint: state.joint })
+      : { personal: nextLedger, joint: null, personalChanged: true, jointChanged: false };
+  } catch (err) {
+    toast(`Couldn't save: ${err.message}`, 'error');
+    return;
+  }
+  return commitParts({ personal: parts.personalChanged ? parts.personal : null, joint: parts.jointChanged ? parts.joint : null }, message);
+}
+function restoreParts(p) {
+  state.personal = p.personal;
+  state.joint = p.joint;
+  recombine();
+}
+/** Save whichever real ledgers are given (null = unchanged), then redraw and sync. */
+async function commitParts({ personal = null, joint = null }, message) {
+  const previous = { personal: state.personal, joint: state.joint };
+  if (personal) state.personal = personal;
+  if (joint) state.joint = joint;
+  recombine();
+  let personalSaved = false;
+  try {
+    if (personal) { await saveLedger(personal); personalSaved = true; }
+    if (joint) await saveJointLedger(joint);
   } catch (err) {
     // Only a failure to STORE the data is "couldn't save" — and only then is
-    // the change taken back off the screen.
-    state.ledger = previous;
+    // the change taken back off the screen. (A personal save that worked
+    // before a joint one failed is kept: it is on the device.)
+    restoreParts({ personal: personalSaved ? personal : previous.personal, joint: previous.joint });
     try { render(); } catch (e) { console.error(e); }
     toast(`Couldn't save: ${err.message}`, 'error');
     return;
   }
+  // ---- stored.
   // v0.13.2: saved. From here on a problem only affects the screen — the change
   // stays (on screen and on the device) and still goes to Drive.
   let screenError = null;
@@ -583,7 +807,7 @@ function render() {
   $('unexportedDot').hidden = sync.isEnabled() || !hasUnexported();
   $('installBtn').hidden = !state.installPrompt;
 
-  if (!state.ledger.accounts.length) {
+  if (!state.personal.accounts.length) {
     $('fab').hidden = true;
     $('viewBtn').hidden = true;
     renderSetup();
@@ -604,6 +828,9 @@ function render() {
   if (isGrid()) {
     $('fab').hidden = true;
     renderGrid(accounts);
+  } else if (state.summary) {
+    $('fab').hidden = true; // Summary doesn't know which account to add to
+    renderSummary(accounts);
   } else {
     $('fab').hidden = false;
     renderList(accounts);
@@ -630,7 +857,7 @@ function renderSetup() {
         if (pence === null) return toast(`Check the amount for ${r.name}`, 'error');
         ledger = addAccount(ledger, { name: r.name, type: r.type, institution: r.institution, openingBalance: pence, openingDate: date.value }).ledger;
       }
-      commit(ledger, 'Accounts created');
+      commitParts({ personal: ledger }, 'Accounts created'); // first run: always your own file
     },
   },
   h('h2', {}, 'Quick start'),
@@ -651,41 +878,96 @@ function renderSetup() {
 
 // ---- mobile list
 
-function renderList(accounts) {
-  const active = accountById(state.activeAccountId);
+/** Phone tab row: v0.14 Summary first, then each account. */
+function accountTabs(accounts) {
+  const summaryTab = h('button', {
+    type: 'button', role: 'tab', class: `tab tab-summary ${state.summary ? 'tab-active' : ''}`, 'aria-selected': String(state.summary),
+    onclick: () => { state.summary = true; state.listScrollToToday = true; render(); },
+  }, (() => { const i = h('span', { class: 'summary-icon', 'aria-hidden': 'true' }); i.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm10 0h8v8h-8z"/></svg>'; return i; })(),
+  h('span', { class: 'tab-name' }, 'Summary'));
+  return h('nav', { class: 'tabs', role: 'tablist' },
+    summaryTab,
+    accounts.map((a) => {
+      const on = !state.summary && a.id === state.activeAccountId;
+      return h('button', {
+        type: 'button', role: 'tab', class: `tab ${on ? 'tab-active' : ''}`,
+        'aria-selected': String(on),
+        style: { '--acc': institutionStyle(a.institution).colour },
+        onclick: () => openAccountTab(a.id),
+      }, swatch(a), h('span', { class: 'tab-name' }, a.name));
+    }));
+}
+function openAccountTab(id) {
+  state.summary = false;
+  state.activeAccountId = id;
+  state.listScrollToToday = true;
+  render();
+}
+
+/**
+ * The coloured header card for an account: today's balance, end of month,
+ * limit warnings, the card's statement line and envelope chips. On the
+ * account's own page it has the Account… / Reconcile… buttons; on the v0.14
+ * Summary it shows the account's name instead and tapping it opens the account.
+ */
+function bannerCard(active, view, today, { summary = false } = {}) {
   const style = institutionStyle(active.institution);
-
-  const tabs = h('nav', { class: 'tabs', role: 'tablist' },
-    accounts.map((a) => h('button', {
-      type: 'button', role: 'tab', class: `tab ${a.id === active.id ? 'tab-active' : ''}`,
-      'aria-selected': String(a.id === active.id),
-      style: { '--acc': institutionStyle(a.institution).colour },
-      onclick: () => { state.activeAccountId = a.id; state.listScrollToToday = true; render(); },
-    }, swatch(a), h('span', { class: 'tab-name' }, a.name))));
-
-  // Same split as the grid header: today's balance, plus where it will be at
-  // the end of the current calendar month.
-  // Today's figure counts confirmed entries only; end of month also counts
-  // projected recurring entries (including any overdue, unconfirmed ones).
-  const todayIsoStr = todayIso();
-  const view = viewLedger();
-  const bal = balanceAsOf(state.ledger, active, todayIsoStr);
-  const eomIso = endOfMonthIso(todayIsoStr);
+  // Same split as the grid header: today's balance (confirmed entries only),
+  // plus where it will be at the end of the current calendar month (projected
+  // recurring entries too, including any overdue, unconfirmed ones).
+  const bal = balanceAsOf(state.ledger, active, today);
+  const eomIso = endOfMonthIso(today);
   const eomBal = balanceAsOf(view, active, eomIso);
-  const banner = h('section', { class: 'banner', style: { '--acc': style.colour, '--ink': style.ink } },
+  const open = () => openAccountTab(active.id);
+  return h('section', {
+    class: `banner ${summary ? 'banner-summary' : ''}`, style: { '--acc': style.colour, '--ink': style.ink },
+    ...(summary ? {
+      role: 'button', tabindex: '0', 'aria-label': `Open ${active.name}`, dataset: { summaryFor: active.id },
+      // the statement line and envelope chips keep their own taps
+      onclick: (e) => { if (!e.target.closest('button')) open(); },
+      onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); open(); } },
+    } : {}),
+  },
     style.accent ? h('div', { class: 'banner-accent', style: { background: style.accent } }) : null,
-    h('div', { class: 'banner-label' }, active.type === 'credit' ? 'Owed today' : 'Balance today'),
+    summary ? h('div', { class: 'banner-name' }, style.icon === 'people' ? peopleIcon(15) : null, active.name) : null,
+    h('div', { class: 'banner-label' }, !summary && style.icon === 'people' ? peopleIcon(14) : null, showsOwed(active) ? 'Owed today' : 'Balance today'),
     h('div', { class: `banner-amount ${bal < 0 ? 'neg' : ''}` }, formatPence(bal)),
-    h('div', { class: 'banner-eom' }, `${active.type === 'credit' ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${monthYearLabel(eomIso)}`),
+    h('div', { class: 'banner-eom' }, `${showsOwed(active) ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${monthYearLabel(eomIso)}`),
+    (() => { const w = limitHeaderText(active, view); return w ? h('div', { class: `banner-lim ${w.cls}` }, w.text) : null; })(),
     (() => {
-      const o = cardOutlook(active, view, todayIsoStr);
+      const o = cardOutlook(active, view, today);
       if (!o) return null;
       return h('button', { type: 'button', class: 'banner-stmt', onclick: () => openStatementDialog(active.id, o.st.month) }, outlookText(active, o), ' ›');
     })(),
-    h('div', { class: 'banner-btns' },
-      h('button', { type: 'button', class: 'banner-edit', onclick: () => openAccountDialog(active.id) }, 'Account…'),
-      h('button', { type: 'button', class: 'banner-edit banner-rec', onclick: () => openReconcileDialog(active.id) }, 'Reconcile…')),
-    envBannerBlock(active, todayIsoStr));
+    summary
+      ? h('div', { class: 'banner-open', 'aria-hidden': 'true' }, '›')
+      : h('div', { class: 'banner-btns' },
+          h('button', { type: 'button', class: 'banner-edit', onclick: () => openAccountDialog(active.id) }, 'Account…'),
+          h('button', { type: 'button', class: 'banner-edit banner-rec', onclick: () => openReconcileDialog(active.id) }, 'Reconcile…')),
+    envBannerBlock(active, today));
+}
+
+/** v0.14 phone landing page: every visible account's header card. */
+function renderSummary(accounts) {
+  const view = viewLedger();
+  const today = todayIso();
+  const wrap = h('div', { class: 'list-view summary-view' },
+    accountTabs(accounts),
+    h('div', { class: 'summary' }, accounts.map((a) => bannerCard(a, view, today, { summary: true }))));
+  addSwipe(wrap, accounts);
+  app.replaceChildren(wrap);
+  wrap.querySelector('.tab-active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (state.listScrollToToday) {
+    state.listScrollToToday = false;
+    requestAnimationFrame(() => window.scrollTo(0, 0));
+  }
+}
+
+function renderList(accounts) {
+  const active = accountById(state.activeAccountId);
+  const tabs = accountTabs(accounts);
+  const view = viewLedger();
+  const banner = bannerCard(active, view, todayIso());
 
   // Oldest first, same order as the grid: future entries at the bottom.
   const running = accountRunning(view, active);
@@ -694,7 +976,7 @@ function renderList(accounts) {
   feed.append(h('li', { class: 'day', dataset: { date: active.openingDate } }, longDate(active.openingDate)),
     h('li', {}, h('div', { class: 'entry entry-note' },
       h('span', { class: 'entry-main' }, h('span', { class: 'entry-desc' }, 'Brought forward')),
-      h('span', { class: 'entry-amts' }, h('span', { class: 'entry-bal' }, formatPence(active.openingBalance))))));
+      h('span', { class: 'entry-amts' }, h('span', { class: 'entry-bal' }, formatPence(displayOpening(active)))))));
   let lastDate = active.openingDate;
   for (const { transaction: t, runningBalance } of running) {
     if (t.date !== lastDate) {
@@ -724,7 +1006,7 @@ function renderList(accounts) {
     feed.append(h('li', {},
       h('button', {
         type: 'button',
-        class: `entry ${t.kind === 'note' ? 'entry-note' : ''} ${t.date > today ? 'future' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''}`,
+        class: `entry ${t.kind === 'note' ? 'entry-note' : ''} ${t.date > today ? 'future' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''} ${!p?.skipped && t.kind !== 'note' && limitClass(active, runningBalance) ? 'lim-row' : ''}`,
         onclick: () => (p ? openProjection(p) : openTxDialog({ txId: t.id })),
       },
         h('span', { class: 'entry-main' },
@@ -743,7 +1025,7 @@ function renderList(accounts) {
           ? h('span', { class: 'entry-amt muted' }, 'note')
           : h('span', { class: 'entry-amts' },
               h('span', { class: `entry-amt ${t.direction}` }, isReconciled(t) ? h('span', { class: 'rec-tick', title: 'Reconciled' }, '✓ ') : null, `${t.direction === 'credit' ? '+' : '−'}${formatPence(t.amount)}`),
-              h('span', { class: `entry-bal ${runningBalance < 0 ? 'neg' : ''}` }, p?.skipped ? 'skipped' : formatPence(runningBalance))))));
+              h('span', { class: `entry-bal ${runningBalance < 0 && !showsOwed(active) ? 'neg' : ''} ${p?.skipped ? '' : limitClass(active, runningBalance)}` }, p?.skipped ? 'skipped' : formatPence(runningBalance))))));
   }
   const more = horizonControl('horizon-list');
   if (more) feed.append(h('li', { class: 'horizon-li' }, more));
@@ -778,14 +1060,17 @@ function addSwipe(el, accounts) {
     const dy = e.changedTouches[0].clientY - y0;
     x0 = null;
     if (Math.abs(dx) < 70 || Math.abs(dy) > 50) return;
-    const i = accounts.findIndex((a) => a.id === state.activeAccountId);
+    // v0.14: Summary sits before the first account
+    const i = state.summary ? -1 : accounts.findIndex((a) => a.id === state.activeAccountId);
     const j = i + (dx < 0 ? 1 : -1);
-    if (j >= 0 && j < accounts.length) { state.activeAccountId = accounts[j].id; state.listScrollToToday = true; render(); }
+    if (j === -1) { state.summary = true; state.listScrollToToday = true; render(); }
+    else if (j >= 0 && j < accounts.length) openAccountTab(accounts[j].id);
   });
 }
 
 // ---- desktop grid
 
+let gridHeadObserver = null;
 function renderGrid(accounts) {
   const prevWrap = app.querySelector('.grid-wrap');
   const keepScroll = prevWrap ? { top: prevWrap.scrollTop, left: prevWrap.scrollLeft } : null;
@@ -815,12 +1100,13 @@ function renderGrid(accounts) {
       return h('th', { colspan: '3', class: 'acc-head', dataset: { accHead: a.id }, style: { '--acc': s.colour, '--ink': s.ink } },
         h('div', { class: 'acc-bar', style: { background: s.colour } }, s.accent ? h('span', { class: 'acc-bar-accent', style: { background: s.accent } }) : null),
         h('div', { class: 'acc-title' },
-          h('button', { type: 'button', class: 'btn-link acc-name', title: 'Edit account', onclick: () => openAccountDialog(a.id) }, a.name),
+          h('button', { type: 'button', class: 'btn-link acc-name', title: 'Edit account', onclick: () => openAccountDialog(a.id) }, s.icon === 'people' ? peopleIcon(14) : null, a.name),
           h('span', { class: 'acc-btns' },
             h('button', { type: 'button', class: 'acc-rec', title: `Reconcile ${a.name}`, 'aria-label': `Reconcile ${a.name}`, onclick: () => openReconcileDialog(a.id) }, '✓'),
             h('button', { type: 'button', class: 'acc-add', title: `Add entry to ${a.name}`, onclick: () => openTxDialog({ accountId: a.id }) }, '+'))),
-        h('div', { class: `acc-total ${todayBal < 0 ? 'neg' : ''}` }, `${a.type === 'credit' ? 'Owed ' : ''}${formatPence(todayBal)}`),
+        h('div', { class: `acc-total ${todayBal < 0 ? 'neg' : ''}` }, `${showsOwed(a) ? 'Owed ' : ''}${formatPence(todayBal)}`),
         h('div', { class: 'acc-eom', dataset: { eomFor: a.id } }),
+        (() => { const w = limitHeaderText(a, view); return w ? h('div', { class: `acc-lim ${w.cls}`, title: 'From today to the end of what’s shown' }, w.text) : null; })(),
         envHeaderBlock(a, today),
         (() => {
           const o = cardOutlook(a, view, today);
@@ -834,7 +1120,7 @@ function renderGrid(accounts) {
   body.append(h('tr', { class: 'row-bf', dataset: { date: openingDate } },
     h('td', { class: 'sticky-l c-date' }, shortDate(openingDate)),
     h('td', { class: 'sticky-l2 c-desc' }, 'Brought forward'),
-    accounts.map((a) => [h('td', {}), h('td', {}), h('td', { class: 'num bal-col' }, formatPence(a.openingBalance))])));
+    accounts.map((a) => [h('td', {}), h('td', {}), h('td', { class: 'num bal-col' }, formatPence(displayOpening(a)))])));
 
   // a line across the grid where a new calendar month starts
   let prevMonth = openingDate.slice(0, 7);
@@ -890,7 +1176,7 @@ function renderGrid(accounts) {
       tr.append(
         h('td', { class: `num clickable cell${cell?.credit != null ? rec : ''}`, onclick: open('credit'), title: cell?.credit != null && rec ? 'Reconciled' : null }, cell?.credit != null ? formatPence(cell.credit, { symbol: false }) : cell?.note ? '·' : ''),
         h('td', { class: `num clickable cell${cell?.debit != null ? rec : ''}`, onclick: open('debit'), title: cell?.debit != null && rec ? 'Reconciled' : null }, cell?.debit != null ? formatPence(cell.debit, { symbol: false }) : ''),
-        h('td', { class: `num bal-col ${cell ? 'bal-changed' : 'bal-carried'} ${bal < 0 ? 'neg' : ''}` }, formatPence(bal, { symbol: false })));
+        h('td', { class: `num bal-col ${cell ? 'bal-changed' : 'bal-carried'} ${bal < 0 ? 'neg' : ''} ${cell ? limitClass(a, bal) : limitClass(a, bal).replace('lim-', 'lim-text-')}`, title: balanceLevel(a, bal) ? `${a.name}: ${LEVELS[balanceLevel(a, bal)].label}` : null }, formatPence(bal, { symbol: false })));
     }
     body.append(tr);
   }
@@ -925,10 +1211,25 @@ function renderGrid(accounts) {
       const eomBal = balanceAsOf(view, a, eomIso);
       const el = table.querySelector(`[data-eom-for="${a.id}"]`);
       if (!el) continue;
-      el.textContent = `${a.type === 'credit' ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${label}`;
+      el.textContent = `${showsOwed(a) ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${label}`;
       el.classList.toggle('neg', eomBal < 0);
     }
+    setHead1(); // the text just changed — the header row may now be a different height
   }
+
+  // The Credit/Debit/Balance row sticks just under the account headers, whose
+  // height depends on their content. v0.14: measured AFTER the "…at end of"
+  // lines are filled in (measuring before them left that row a line too high
+  // once scrolled, when a card statement or envelope line made the header
+  // taller than its 92px minimum), and again whenever the header resizes.
+  let head1Px = 0;
+  function setHead1() {
+    const px = Math.ceil(head1.getBoundingClientRect().height);
+    if (px && px !== head1Px) { head1Px = px; table.style.setProperty('--head1', `${px}px`); }
+  }
+  gridHeadObserver?.disconnect(); // the previous redraw's header is gone
+  gridHeadObserver = 'ResizeObserver' in window ? new ResizeObserver(setHead1) : null;
+  gridHeadObserver?.observe(head1);
 
   let scrollQueued = false;
   wrap.addEventListener('scroll', () => {
@@ -938,9 +1239,7 @@ function renderGrid(accounts) {
   });
 
   requestAnimationFrame(() => {
-    // the Credit/Debit/Balance row sticks just under the account headers,
-    // whose height depends on how many lines the tallest one has
-    table.style.setProperty('--head1', `${Math.ceil(head1.getBoundingClientRect().height)}px`);
+    updateMonthInView(); // fills the "…at end of" lines, then measures the header (setHead1)
     if (keepScroll) { wrap.scrollTop = keepScroll.top; wrap.scrollLeft = keepScroll.left; }
     else {
       // open at today: the last row dated today or earlier sits near the
@@ -984,7 +1283,7 @@ function openTxDialog(opts) {
   const date = h('input', { type: 'date', required: true, value: existing?.date ?? opts.date ?? todayIso() });
   const dateWarn = h('div', { class: 'warn small', hidden: true });
 
-  const others = state.ledger.accounts.filter((a) => a.id !== account.id && a.active);
+  const others = sameFileAccounts(account.id).filter((a) => a.id !== account.id && a.active); // v0.14: never across the two files
   const counterpartSelect = h('select', {},
     h('option', { value: '' }, 'No — just this account'),
     others.map((a) => h('option', { value: a.id }, a.name)));
@@ -1048,8 +1347,18 @@ function openTxDialog(opts) {
   counterpartSelect.addEventListener('change', syncEnvelope);
   counterpartSelect.addEventListener('change', () => syncKind());
 
+  /** v0.14: a transfer can't take money out of a loan account — those choices are greyed out. */
+  function syncLoanChoices() {
+    for (const o of counterpartSelect.options) {
+      if (!o.value) continue;
+      const other = accountById(o.value);
+      o.disabled = (isLoan(account) && kind === 'debit') || (isLoan(other) && kind === 'credit');
+    }
+    if (counterpartSelect.selectedOptions[0]?.disabled) counterpartSelect.value = '';
+  }
   function syncKind() {
     for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === kind));
+    syncLoanChoices();
     if (rfField) rfField.hidden = kind !== 'debit' || (!existing && Boolean(counterpartSelect.value));
     amountField.hidden = kind === 'note';
     if (counterpartField && !existing) counterpartField.hidden = kind === 'note';
@@ -1059,7 +1368,12 @@ function openTxDialog(opts) {
   }
   function updateCounterpartHint() {
     const other = accountById(counterpartSelect.value);
-    if (!other) { counterpartHint.textContent = 'e.g. a card payment from this account, or money moved between accounts.'; return; }
+    if (!other) {
+      counterpartHint.textContent = isLoan(account) && kind === 'debit'
+        ? 'Money can’t be transferred out of a loan account — a charge or interest is fine as it is.'
+        : 'e.g. a card payment from this account, or money moved between accounts.';
+      return;
+    }
     const oppositeDir = kind === 'credit' ? 'debit' : 'credit';
     counterpartHint.textContent = `Adds a matching ${oppositeDir} of the same amount to ${other.name} — one row in the grid.`;
   }
@@ -1153,6 +1467,7 @@ function openTxDialog(opts) {
         const unticked = state.ledger.transactions.filter((t) => isReconciled(t) && next.transactions.some((n) => n.id === t.id && !isReconciled(n)));
         if (unticked.length && !confirm(`This entry has been reconciled${unticked.length > 1 ? ' (on both accounts)' : ''}.\n\nChanging it will untick it so you can check it again. Save anyway?`)) return;
       }
+      if (!limitsOK(next)) return; // v0.14: warn if it takes an account past a line
       if (!existing) state.activeAccountId = account.id;
       dlg.close();
       commit(next, existing ? 'Updated' : 'Added');
@@ -1180,8 +1495,10 @@ function openTxDialog(opts) {
         const recNote = isReconciled(existing) || isReconciled(counterpart) ? '\n\nIt has been reconciled — the bank shows it.' : '';
         const fenced = isRingFenced(state.ledger, existing.id);
         if (!confirm((counterpart ? 'Delete this entry and its linked entry in the other account?' : fenced ? 'Delete this entry and its ring-fence transfer?' : 'Delete this entry?') + recNote)) return;
+        const next = fenced ? removeRingFence(deleteTransaction(state.ledger, existing.id), existing.id) : deleteTransaction(state.ledger, existing.id);
+        if (!limitsOK(next)) return;
         dlg.close();
-        commit(fenced ? removeRingFence(deleteTransaction(state.ledger, existing.id), existing.id) : deleteTransaction(state.ledger, existing.id), 'Deleted');
+        commit(next, 'Deleted');
       },
     }, 'Delete') : h('span'),
     h('button', { type: 'submit', class: 'btn-primary' }, existing ? 'Save' : 'Add')));
@@ -1270,6 +1587,7 @@ function openOccurrenceDialog(itemId, period) {
   const apply = (fn, message) => {
     const next = attempt(fn);
     if (!next) return;
+    if (!limitsOK(next)) return;
     close();
     commit(next, message);
   };
@@ -1440,6 +1758,7 @@ function openTicketDialog(ticketId) {
       }
       const next = attempt(() => confirmTicket(state.ledger, tset, t, { date: date.value, amount: pence, statementMonth }));
       if (!next) return;
+      if (!limitsOK(next)) return;
       close();
       commit(next, 'Ticket confirmed');
     },
@@ -1479,6 +1798,7 @@ function openReturnDialog(month) {
       if (!date.value) return toast('A valid date is required', 'error');
       const next = attempt(() => confirmReturn(state.ledger, tset, month, { date: date.value, amount: pence, description: p.description }));
       if (!next) return;
+      if (!limitsOK(next)) return;
       close();
       commit(next, 'Confirmed');
     },
@@ -1796,9 +2116,16 @@ function openRecurringEditor(itemId) {
   const seg = h('div', { class: 'seg', role: 'radiogroup' },
     [['out', 'Money out'], ['in', 'Money in'], ['transfer', 'Transfer / card payment']].map(([v, label]) =>
       h('button', { type: 'button', role: 'radio', class: 'seg-btn', dataset: { value: v }, onclick: () => { kind = v; sync(); } }, label)));
-  const accountOptions = (selected) => accounts.map((a) => h('option', { value: a.id, selected: a.id === selected }, a.name));
+  const accountOptions = (selected, list = accounts) => list.map((a) => h('option', { value: a.id, selected: a.id === selected }, a.name));
   const account = h('select', {}, accountOptions(defaultAccount));
-  const toAccount = h('select', {}, accountOptions(existing?.toAccountId ?? accounts.find((a) => a.id !== defaultAccount && a.type === 'credit')?.id ?? accounts.find((a) => a.id !== defaultAccount)?.id));
+  // v0.14: a transfer stays within one file (your accounts, or the joint account)
+  const toChoices = (fromId) => { const ok = new Set(sameFileAccounts(fromId).map((a) => a.id)); return accounts.filter((a) => ok.has(a.id)); };
+  const defaultTo = (fromId) => { const list = toChoices(fromId); return list.find((a) => a.id !== fromId && a.type === 'credit')?.id ?? list.find((a) => a.id !== fromId)?.id; };
+  const toAccount = h('select', {}, accountOptions(existing?.toAccountId ?? defaultTo(defaultAccount), toChoices(defaultAccount)));
+  account.addEventListener('change', () => {
+    const keep = toChoices(account.value).some((a) => a.id === toAccount.value) ? toAccount.value : defaultTo(account.value);
+    toAccount.replaceChildren(...accountOptions(keep, toChoices(account.value)));
+  });
   const accountLabel = h('span', {}, 'Account');
   const toField = h('label', { class: 'field' }, h('span', {}, 'To (e.g. the credit card)'), toAccount);
   const amount = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input', placeholder: '0.00', value: existing ? penceToInput(existing.amount) : '' });
@@ -1977,6 +2304,7 @@ function openRecurringEditor(itemId) {
         ? attempt(() => updateRecurring(state.ledger, existing.id, d))
         : attempt(() => addRecurring(state.ledger, d)?.ledger);
       if (!next) return;
+      if (!limitsOK(next)) return;
       dlg.close();
       commit(next, existing ? 'Recurring item updated' : 'Recurring item added');
       if (isOpen('recurringDialog')) renderRecurringManager();
@@ -2009,8 +2337,10 @@ function openRecurringEditor(itemId) {
       type: 'button', class: 'btn-danger',
       onclick: () => {
         if (!confirm(`Delete “${existing.description}”?\n\nIts projected entries disappear. Entries you’ve already confirmed stay as they are.`)) return;
+        const next = deleteRecurring(state.ledger, existing.id);
+        if (!limitsOK(next)) return; // e.g. deleting an income item
         dlg.close();
-        commit(deleteRecurring(state.ledger, existing.id), 'Recurring item deleted');
+        commit(next, 'Recurring item deleted');
         if (isOpen('recurringDialog')) renderRecurringManager();
         if (isOpen('settingsDialog')) renderSettings();
       },
@@ -2416,9 +2746,27 @@ function openAccountDialog(accountId) {
 
   const name = h('input', { type: 'text', required: true, value: existing?.name ?? '', placeholder: 'e.g. Monzo' });
   const type = h('select', {},
-    [['current', 'Current account'], ['savings', 'Savings'], ['credit', 'Credit card']].map(([v, l]) => h('option', { value: v, selected: (existing?.type ?? 'current') === v }, l)));
-  const inst = h('select', {}, Object.entries(INSTITUTIONS).map(([k, v]) => h('option', { value: k, selected: (existing?.institution ?? 'other') === k }, v.label)));
-  const opening = h('input', { type: 'text', inputmode: 'decimal', class: 'amount-input', value: existing ? penceToInput(existing.openingBalance) : '', placeholder: '0.00' });
+    [['current', 'Current account'], ['savings', 'Savings'], ['credit', 'Credit card'], ['loan', 'Loan / credit account']].map(([v, l]) => h('option', { value: v, selected: (existing?.type ?? 'current') === v }, l)));
+  const isJoint = isJointAccount(existing); // v0.14
+  const inst = h('select', {}, Object.entries(INSTITUTIONS).filter(([k]) => k !== 'joint' || isJoint).map(([k, v]) => h('option', { value: k, selected: (existing?.institution ?? 'other') === k }, v.label)));
+  // v0.14: a loan is stored as a negative balance but typed (and shown) as the amount owed
+  const openingShown = existing ? (isLoan(existing) ? -existing.openingBalance : existing.openingBalance) : null;
+  const opening = h('input', { type: 'text', inputmode: 'decimal', class: 'amount-input', value: openingShown === null ? '' : `${openingShown < 0 ? '-' : ''}${penceToInput(Math.abs(openingShown))}`, placeholder: '0.00' });
+  // v0.14 limits
+  const limitInput = (v) => h('input', { type: 'text', inputmode: 'decimal', class: 'amount-input', placeholder: 'none', value: Number.isInteger(v) && v > 0 ? penceToInput(v) : '' });
+  const overdraft = limitInput(existing?.overdraftLimit);
+  const creditLimit = limitInput(existing?.creditLimit);
+  const overdraftField = h('label', { class: 'field' }, h('span', {}, 'Arranged overdraft limit (£)'), overdraft,
+    h('span', { class: 'muted small' }, 'Leave blank for none. You’re warned before anything takes the account into it, and more strongly past it.'));
+  const creditLimitField = h('label', { class: 'field' }, h('span', {}, 'Credit limit (£)'), creditLimit,
+    h('span', { class: 'muted small' }, 'Leave blank for none. You’re warned before anything takes the card over it.'));
+  const loanNote = h('p', { class: 'muted small' }, 'Shown as the amount owed. Repayments go in; money can’t be transferred out. Interest isn’t worked out — add any charge or interest as an entry on the day.');
+  const readLimit = (input, what) => {
+    const t = input.value.trim();
+    if (t === '') return { value: null };
+    const pence = parseAmount(t);
+    return pence === null ? { error: `${what} should look like 500.00, or be blank` } : { value: pence };
+  };
   const openingLabel = h('span', {});
   const openingDate = h('input', { type: 'date', required: true, value: existing?.openingDate ?? firstOfMonthIso() });
   const hidden = h('input', { type: 'checkbox', checked: existing ? !existing.active : false });
@@ -2452,10 +2800,20 @@ function openAccountDialog(accountId) {
   for (const el of [stmtDay, payDays]) el.addEventListener('input', syncStatementPreview);
   syncStatementPreview();
 
+  let shownType = type.value;
   const syncType = () => {
-    openingLabel.textContent = type.value === 'credit' ? 'Amount owed at opening date (£)' : 'Opening balance (£)';
+    // v0.14: switching to or from a loan flips the figure, so it keeps meaning the same money
+    if ((shownType === 'loan') !== (type.value === 'loan') && opening.value.trim()) {
+      const raw = opening.value.trim();
+      opening.value = raw.startsWith('-') ? raw.slice(1) : `-${raw}`;
+    }
+    shownType = type.value;
+    openingLabel.textContent = type.value === 'credit' || type.value === 'loan' ? 'Amount owed at opening date (£)' : 'Opening balance (£)';
     stmtSection.hidden = type.value !== 'credit';
-    envSettings.el.hidden = type.value === 'credit';
+    envSettings.el.hidden = type.value === 'credit' || type.value === 'loan' || isJoint;
+    overdraftField.hidden = type.value === 'credit' || type.value === 'loan';
+    creditLimitField.hidden = type.value !== 'credit';
+    loanNote.hidden = type.value !== 'loan';
   };
   type.addEventListener('change', syncType);
   syncType();
@@ -2469,7 +2827,17 @@ function openAccountDialog(accountId) {
       const negative = raw.startsWith('-');
       const pence = raw === '' ? 0 : parseAmount(negative ? raw.slice(1) : raw);
       if (pence === null) return toast('Opening balance should look like 1234.56', 'error');
-      const fields = { name: name.value, type: type.value, institution: inst.value, openingBalance: negative ? -pence : pence, openingDate: openingDate.value };
+      const typed = negative ? -pence : pence;
+      const fields = { name: name.value, type: type.value, institution: inst.value, openingBalance: type.value === 'loan' ? -typed : typed, openingDate: openingDate.value };
+      if (type.value === 'credit') {
+        const cl = readLimit(creditLimit, 'Credit limit');
+        if (cl.error) return toast(cl.error, 'error');
+        fields.creditLimit = cl.value;
+      } else if (type.value !== 'loan') {
+        const od = readLimit(overdraft, 'Overdraft limit');
+        if (od.error) return toast(od.error, 'error');
+        fields.overdraftLimit = od.value;
+      }
       if (type.value === 'credit') {
         const wd = readInt(stmtDay);
         const days = readInt(payDays);
@@ -2480,7 +2848,7 @@ function openAccountDialog(accountId) {
           statementWorkingDay: wd,
           paymentDaysAfter: wd === null ? cc?.paymentDaysAfter ?? null : days,
         };
-      } else {
+      } else if (!isJoint && type.value !== 'loan') {
         const env = envSettings.value();
         if (env.error) return toast(env.error, 'error');
         fields.envelopes = env.envelopes;
@@ -2493,26 +2861,33 @@ function openAccountDialog(accountId) {
         if (r) state.activeAccountId = r.account.id;
       }
       if (!next) return;
+      if (!limitsOK(next)) return; // a new opening balance or limit
       dlg.close();
       commit(next, existing ? 'Account updated' : 'Account added');
       if (isOpen('settingsDialog')) renderSettings();
     },
   },
   h('header', { class: 'sheet-head' },
+    isJoint ? peopleIcon(18) : null,
     h('h2', {}, existing ? 'Edit account' : 'New account'),
     h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
   h('label', { class: 'field' }, h('span', {}, 'Name'), name),
-  h('div', { class: 'field-pair' },
-    h('label', { class: 'field' }, h('span', {}, 'Type'), type),
-    h('label', { class: 'field' }, h('span', {}, 'Colour (bank)'), inst)),
+  isJoint
+    ? h('p', { class: 'muted small' }, `Your joint account with Alison. Kept in its own Drive file (My Drive/${JOINT_FOLDER_NAME}/${JOINT_FILE_NAME}), apart from your own accounts.`)
+    : h('div', { class: 'field-pair' },
+        h('label', { class: 'field' }, h('span', {}, 'Type'), type),
+        h('label', { class: 'field' }, h('span', {}, 'Colour (bank)'), inst)),
   h('div', { class: 'field-pair' },
     h('label', { class: 'field' }, openingLabel, opening),
     h('label', { class: 'field' }, h('span', {}, 'Opening date'), openingDate)),
+  loanNote,
+  overdraftField,
+  creditLimitField,
   stmtSection,
   envSettings.el,
   existing ? h('label', { class: 'check' }, hidden, h('span', {}, 'Hide this account (keeps its history)')) : null,
   h('div', { class: 'sheet-actions' },
-    existing ? h('button', {
+    existing && !isJoint ? h('button', {
       type: 'button', class: 'btn-danger', disabled: txCount > 0, title: txCount ? `Has ${txCount} entries — hide it instead` : '',
       onclick: () => {
         if (!confirm(`Delete ${existing.name}?`)) return;
@@ -2538,9 +2913,10 @@ function openAccountDialog(accountId) {
 function ticketSection() {
   const l = state.ledger;
   const rec = ticketSettingsRecord(l);
-  const cards = l.accounts.filter((a) => a.type === 'credit' && statementConfig(a));
-  const envOptions = l.accounts.filter((a) => envelopeConfig(a)).flatMap((a) => envelopeList(a).map((e) => ({ value: `${a.id}|${e.id}`, label: `${e.name} · ${a.name}`, name: e.name })));
-  const plain = l.accounts.filter((a) => a.type !== 'credit' && a.active);
+  const own = l.accounts.filter((a) => !isJointAccount(a)); // v0.14: ticket purchases are personal only
+  const cards = own.filter((a) => a.type === 'credit' && statementConfig(a));
+  const envOptions = own.filter((a) => envelopeConfig(a)).flatMap((a) => envelopeList(a).map((e) => ({ value: `${a.id}|${e.id}`, label: `${e.name} · ${a.name}`, name: e.name })));
+  const plain = own.filter((a) => a.type !== 'credit' && !isLoan(a) && a.active);
   const intro = h('p', { class: 'muted small' }, 'Puts each ticket the ticket tracker says you’ve bought — or will buy — on the card on its purchase day, with the same amount ring-fenced from your envelope, and moved back the day before the card is paid.');
   if (!cards.length || !envOptions.length || plain.length < 2) {
     return h('section', { class: 'settings-section', id: 'ticketSection' }, h('h3', {}, 'Ticket purchases'), intro,
@@ -2592,12 +2968,15 @@ function renderSettings() {
     try { return Boolean(navigator.canShare?.({ files: [new File(['{}'], 'x.json', { type: 'application/json' })] })); } catch { return false; }
   })();
 
+  // v0.14: the joint account is pinned first; the arrows move your own accounts among themselves
+  const firstOwn = l.accounts.findIndex((a) => !isJointAccount(a));
   const accountsList = h('ul', { class: 'acc-list' },
     l.accounts.map((a, i) => h('li', { class: a.active ? '' : 'inactive' },
       swatch(a),
-      h('span', { class: 'acc-list-name' }, a.name, a.active ? '' : ' (hidden)'),
-      h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Move up', disabled: i === 0, onclick: () => { commit(moveAccount(state.ledger, a.id, -1)).then(renderSettings); } }, '▲'),
-      h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Move down', disabled: i === l.accounts.length - 1, onclick: () => { commit(moveAccount(state.ledger, a.id, 1)).then(renderSettings); } }, '▼'),
+      h('span', { class: 'acc-list-name' }, a.name, a.active ? '' : ' (hidden)', isJointAccount(a) ? h('span', { class: 'muted small' }, ' · pinned first') : ''),
+      isJointAccount(a) ? [h('span', { class: 'icon-btn' }), h('span', { class: 'icon-btn' })] : [
+        h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Move up', disabled: i === firstOwn, onclick: () => { commit(moveAccount(state.ledger, a.id, -1)).then(renderSettings); } }, '▲'),
+        h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Move down', disabled: i === l.accounts.length - 1, onclick: () => { commit(moveAccount(state.ledger, a.id, 1)).then(renderSettings); } }, '▼')],
       h('button', { type: 'button', class: 'btn-ghost', onclick: () => openAccountDialog(a.id) }, 'Edit'))));
 
   const viewChoice = h('div', { class: 'seg' },
@@ -2645,6 +3024,8 @@ function renderSettings() {
 
     driveSection,
 
+    jointSection(),
+
     backupsSection(st),
 
     usesTracker(l) ? h('section', { class: 'settings-section', id: 'trackerSection' },
@@ -2689,7 +3070,13 @@ function renderSettings() {
     h('section', { class: 'settings-section' },
       h('h3', {}, 'Layout'),
       h('p', { class: 'muted small' }, 'Auto = grid on wide screens, list on phones.'),
-      viewChoice),
+      viewChoice,
+      h('p', { class: 'muted small' }, 'In the list (phone), open on:'),
+      h('div', { class: 'seg' },
+        [['summary', 'Summary'], ['account', 'First account']].map(([v, label]) => h('button', {
+          type: 'button', class: 'seg-btn', 'aria-checked': String(state.phoneLanding === v),
+          onclick: () => { state.phoneLanding = v; writePref('phoneLanding', v); renderSettings(); },
+        }, label)))),
 
     lockSection(),
 
@@ -2707,14 +3094,144 @@ function renderSettings() {
           // Disconnect BEFORE emptying, or the next sync would read the empty
           // ledger as "everything deleted" and push that to Drive.
           if (syncing) await sync.disconnect();
+          // v0.14: the joint account goes off and its local copy goes too (its Drive file is untouched)
+          if (jointSync) await jointSync.disconnect();
+          jointSync = null;
+          state.jointSettings = { enabled: false };
+          await saveJointSettings(state.jointSettings);
+          await removeJointData();
+          state.joint = null;
           state.meta = {};
           await saveMeta(state.meta);
           dlg.close();
-          commit(emptyLedger(), 'All data erased');
+          commitParts({ personal: emptyLedger() }, 'All data erased');
         },
       }, 'Erase all data on this device')),
 
     h('p', { class: 'muted small center' }, `Personal Finance v${APP_VERSION} · ${state.meta.persisted ? 'storage protected' : 'storage may be cleared by the browser — keep exports'}`)));
+}
+
+// ------------------------------------------------------------------ v0.14 joint account switch
+
+/**
+ * ⚙ Joint account: off by default on every device. Turning it on signs in
+ * (from the tap), finds My Drive/Finance Joint/joint.json or makes it, and —
+ * the first time ever — asks for the account's opening balance.
+ */
+function jointSection() {
+  const where = `My Drive/${JOINT_FOLDER_NAME}/${JOINT_FILE_NAME}`;
+  if (!state.jointSettings.enabled) {
+    const remove = h('div', { hidden: true },
+      h('button', {
+        type: 'button', class: 'btn-ghost btn-small',
+        onclick: async () => {
+          if (!confirm('Remove the joint account’s data from this device?\n\nOnly this device’s copy goes. The Drive file is not touched — turn the joint account on again to bring it back.')) return;
+          await removeJointData();
+          renderSettings();
+          toast('Joint data removed from this device');
+        },
+      }, 'Remove joint data from this device'));
+    loadJointLedger().then((l) => { remove.hidden = !l; }).catch(() => {});
+    return h('section', { class: 'settings-section joint-section' },
+      h('h3', {}, peopleIcon(16), ' Joint account'),
+      h('p', { class: 'muted small' }, `Your joint account with Alison, in its own Drive file (${where}), kept apart from your own data. Off on this device.`),
+      h('button', { type: 'button', class: 'btn-secondary', onclick: turnJointOn }, 'Turn on'),
+      remove);
+  }
+  const st = jointSync?.getState();
+  const account = state.joint?.accounts[0] ?? null;
+  const head = h('h3', {}, peopleIcon(16), ' Joint account');
+  if (!account) {
+    if (!st?.lastSyncAt) {
+      return h('section', { class: 'settings-section joint-section' }, head,
+        h('p', { class: 'small warn' }, 'On, but Drive hasn’t been reached yet, so it isn’t known whether the joint file already exists. Tap the cloud button at the top (or Sync now) to try again.'),
+        h('p', { class: 'muted small', id: 'jointStatusLine' }, jointStatusText()),
+        h('button', { type: 'button', class: 'btn-ghost btn-small', onclick: turnJointOff }, 'Turn off'));
+    }
+    return h('section', { class: 'settings-section joint-section' }, head, jointSetupForm(),
+      h('button', { type: 'button', class: 'btn-ghost btn-small', onclick: turnJointOff }, 'Turn off'));
+  }
+  return h('section', { class: 'settings-section joint-section' }, head,
+    h('p', { class: 'small' }, `On · file: ${where}`),
+    h('p', { class: 'muted small', id: 'jointStatusLine' }, jointStatusText()),
+    st?.backupError
+      ? h('p', { class: 'warn small' }, `Last joint backup didn’t work: ${st.backupError}. It tries again with the next change.`)
+      : h('p', { class: 'muted small' }, `Its own backups in My Drive/${JOINT_FOLDER_NAME}/backups (same rules as yours). Last: ${when(st?.lastBackupAt)}${st?.lastBackupAt ? '' : ' — the first is made with the next change'}.`),
+    h('div', { class: 'btn-row' },
+      h('button', { type: 'button', class: 'btn-secondary', onclick: () => openBackupsDialog(jointSync) }, 'Joint backups…'),
+      h('button', { type: 'button', class: 'btn-secondary', onclick: () => doExport(false, 'joint') }, 'Download joint export'),
+      h('button', { type: 'button', class: 'btn-ghost', onclick: turnJointOff }, 'Turn off on this device')));
+}
+
+/** First time only: the joint file is empty — give the account its opening balance. */
+function jointSetupForm() {
+  const earliest = state.personal.accounts.map((a) => a.openingDate).sort()[0] ?? firstOfMonthIso();
+  const date = h('input', { type: 'date', required: true, value: earliest });
+  const amount = h('input', { type: 'text', inputmode: 'decimal', class: 'amount-input', placeholder: '0.00' });
+  return h('form', {
+    class: 'joint-setup',
+    onsubmit: (e) => {
+      e.preventDefault();
+      const raw = amount.value.trim();
+      const negative = raw.startsWith('-');
+      const pence = raw === '' ? 0 : parseAmount(negative ? raw.slice(1) : raw);
+      if (pence === null) return toast('Opening balance should look like 1234.56', 'error');
+      const next = attempt(() => addJointAccount(state.joint, { openingBalance: negative ? -pence : pence, openingDate: date.value }));
+      if (!next) return;
+      state.activeAccountId = next.accounts[0].id;
+      // redraw ⚙ BEFORE toasting (a redraw would wipe the toast — see doExport)
+      commitParts({ joint: next }).then(() => { if (isOpen('settingsDialog')) renderSettings(); toast('Joint account added'); });
+    },
+  },
+  h('p', { class: 'small' }, 'Connected. The joint file is new, so give the joint account its balance as it stood at the start of the opening date.'),
+  h('div', { class: 'field-pair' },
+    h('label', { class: 'field' }, h('span', {}, 'Opening balance (£)'), amount),
+    h('label', { class: 'field' }, h('span', {}, 'Opening date'), date)),
+  h('button', { type: 'submit', class: 'btn-primary' }, 'Add the joint account'));
+}
+
+/** Must be called straight from a tap: the sign-in starts before anything else. */
+function turnJointOn() {
+  const tokenPromise = auth.getToken({ interactive: true });
+  (async () => {
+    const token = await tokenPromise;
+    if (!token) { toast(auth.lastAuthError?.() ?? 'Google sign-in didn’t complete', 'error'); return; }
+    try {
+      const [saved, savedSync] = await Promise.all([loadJointLedger(), loadJointSyncState()]);
+      state.jointSettings = { enabled: true };
+      await saveJointSettings(state.jointSettings);
+      state.joint = saved ?? emptyJointLedger();
+      recombine();
+      jointSync = makeJointEngine();
+      await jointSync.init();
+      render();
+      if (isOpen('settingsDialog')) renderSettings();
+      // turned on before: carry on from the last sync; first time here: find or make the file
+      const r = savedSync?.enabled ? await jointSync.sync() : await jointSync.connect();
+      if (isOpen('settingsDialog')) renderSettings();
+      renderSyncChip();
+      if (r?.status === 'conflicts') openConflictDialog(jointSync);
+      else if (r?.status === 'error' || r?.status === 'needs-tap') toast(`Joint account: ${syncResultText(r, jointSync)}`, 'error');
+      else toast(state.joint.accounts.length ? 'Joint account on' : 'Connected — now give the joint account its opening balance');
+    } catch (err) {
+      toast(`Joint account: ${err.message}`, 'error');
+    }
+  })();
+}
+
+async function turnJointOff() {
+  const dirty = jointSync?.getState().dirty;
+  if (!confirm('Turn the joint account off on this device?\n\nIt disappears from this device and stops syncing here. Your own accounts aren’t affected. The Drive file stays as it is, and this device keeps its copy so turning it back on is quick.'
+    + (dirty ? '\n\nThis device has joint changes that haven’t reached Drive yet — they’ll go when you turn it back on.' : ''))) return;
+  state.jointSettings = { enabled: false };
+  await saveJointSettings(state.jointSettings);
+  jointSync = null;
+  state.joint = null;
+  recombine();
+  render();
+  renderSyncChip();
+  if (isOpen('settingsDialog')) renderSettings();
+  toast('Joint account off on this device');
 }
 
 // ------------------------------------------------------------------ automatic backups (v0.9)
@@ -2731,7 +3248,7 @@ function backupsSection(st) {
     st.backupError
       ? h('p', { class: 'warn small' }, `Last backup didn’t work: ${st.backupError}. It tries again with the next change.`)
       : h('p', { class: 'muted small' }, `Last backup: ${when(st.lastBackupAt)}${st.lastBackupAt ? '' : ' — the first is made with your next change'}`),
-    h('button', { type: 'button', class: 'btn-secondary', onclick: openBackupsDialog }, 'Backups…'));
+    h('button', { type: 'button', class: 'btn-secondary', onclick: () => openBackupsDialog(sync) }, 'Backups…'));
 }
 
 function backupDayLabel(b) {
@@ -2740,9 +3257,11 @@ function backupDayLabel(b) {
 }
 
 /** Must be called straight from a tap: listing may need Google's sign-in window. */
-function openBackupsDialog() {
+function openBackupsDialog(engine = sync) {
   const dlg = $('backupsDialog');
-  const listing = sync.listBackups(); // starts the sign-in synchronously (Android)
+  const listing = engine.listBackups(); // starts the sign-in synchronously (Android)
+  const isJoint = engine === jointSync;
+  const current = () => (isJoint ? state.joint : state.personal); // v0.14: compare with that file's own data
   const close = h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕');
   const head = (title, back) => h('header', { class: 'sheet-head' },
     back ? h('button', { type: 'button', class: 'btn-ghost', onclick: back }, '‹ Back') : null,
@@ -2750,13 +3269,14 @@ function openBackupsDialog() {
   const show = (...children) => dlg.replaceChildren(h('div', { class: 'sheet-body' }, ...children));
 
   let backups = [];
+  const title = isJoint ? 'Joint account backups' : 'Backups';
   function drawList() {
     const intro = h('p', { class: 'muted small' }, 'Each backup is your data as it was just before that day’s first change. Pick one to see what’s in it before restoring.');
     if (!backups.length) {
-      show(head('Backups'), intro, h('p', { class: 'muted' }, 'No backups yet. The first is made the next time a change is saved to Drive.'));
+      show(head(title), intro, h('p', { class: 'muted' }, 'No backups yet. The first is made the next time a change is saved to Drive.'));
       return;
     }
-    show(head('Backups'), intro,
+    show(head(title), intro,
       h('ul', { class: 'rec-list backup-list' }, backups.map((b) => h('li', {}, h('button', {
         type: 'button', class: 'rec-row', onclick: () => openBackup(b),
       }, h('span', { class: 'rec-main' },
@@ -2769,27 +3289,28 @@ function openBackupsDialog() {
     show(head(backupDayLabel(b), drawList), h('p', { class: 'muted' }, 'Opening…'));
     let parsed;
     try {
-      parsed = await sync.readBackup(b.id);
+      parsed = await engine.readBackup(b.id);
     } catch (err) {
       show(head(backupDayLabel(b), drawList), h('p', { class: 'warn' }, err.message));
       return;
     }
     const backup = parsed.ledger;
     const today = todayIso();
-    const ids = [...new Set([...state.ledger.accounts, ...backup.accounts].map((a) => a.id))];
+    const live = current();
+    const ids = [...new Set([...live.accounts, ...backup.accounts].map((a) => a.id))];
     const rows = ids.map((id) => {
-      const nowAcc = state.ledger.accounts.find((a) => a.id === id);
+      const nowAcc = live.accounts.find((a) => a.id === id);
       const oldAcc = backup.accounts.find((a) => a.id === id);
       const acc = nowAcc ?? oldAcc;
       const then = oldAcc ? balanceAsOf(backup, oldAcc, today) : null;
-      const now = nowAcc ? balanceAsOf(state.ledger, nowAcc, today) : null;
+      const now = nowAcc ? balanceAsOf(live, nowAcc, today) : null;
       return h('tr', { class: then !== now ? 'differs' : '' },
         h('td', {}, acc.name),
         h('td', {}, then === null ? '—' : formatPence(then)),
         h('td', {}, now === null ? '—' : formatPence(now)));
     });
     const nThen = backup.transactions.length;
-    const nNow = state.ledger.transactions.length;
+    const nNow = live.transactions.length;
     const what = b.info.kind === 'before-restore'
       ? 'Your data as it was just before a restore.'
       : 'Your data as it was just before this day’s first change.';
@@ -2814,12 +3335,12 @@ function openBackupsDialog() {
       'If your other device has changes it hasn’t synced yet, those will be added back on top when it next syncs.');
     if (!ok) return;
     show(head('Restoring…'), h('p', { class: 'muted' }, 'Saving a copy of your current data, then restoring…'));
-    const r = await sync.restoreBackup(backup);
+    const r = await engine.restoreBackup(backup);
     if (r.status === 'restored') {
       dlg.close();
       if (isOpen('settingsDialog')) renderSettings();
       toast(r.pending ? 'Restored here — it reaches Drive on the next sync' : `Restored the backup from ${backupDayLabel(b)}`);
-      if (r.conflicts) openConflictDialog();
+      if (r.conflicts) openConflictDialog(engine);
       return;
     }
     const msg = r.status === 'needs-tap' ? 'Google sign-in has expired. Tap the cloud button at the top, then try again.' : (r.reason ?? 'Restore failed');
@@ -2827,10 +3348,10 @@ function openBackupsDialog() {
       h('button', { type: 'button', class: 'btn-secondary', onclick: drawList }, 'Back to the list'));
   }
 
-  show(head('Backups'), h('p', { class: 'muted' }, 'Looking on Google Drive…'));
+  show(head(title), h('p', { class: 'muted' }, 'Looking on Google Drive…'));
   openDialog(dlg);
   listing.then((list) => { backups = list; drawList(); })
-    .catch((err) => show(head('Backups'), h('p', { class: 'warn' }, err.message)));
+    .catch((err) => show(head(title), h('p', { class: 'warn' }, err.message)));
 }
 
 function downloadBlob(file, name) {
@@ -2842,9 +3363,10 @@ function downloadBlob(file, name) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-async function doExport(share) {
-  const payload = JSON.stringify(buildExport(state.ledger, deviceLabel()), null, 1);
-  const name = exportFileName();
+async function doExport(share, which = 'personal') {
+  const joint = which === 'joint';
+  const payload = JSON.stringify(buildExport(joint ? state.joint : state.personal, deviceLabel()), null, 1);
+  const name = joint ? exportFileName().replace(/^finance-tracker-/, 'finance-joint-') : exportFileName();
   const file = new File([payload], name, { type: 'application/json' });
   let message = `Exported ${name}`;
   if (share) {
@@ -2862,8 +3384,10 @@ async function doExport(share) {
   } else {
     downloadBlob(file, name);
   }
-  state.meta = { ...state.meta, lastExportAt: new Date().toISOString() };
-  await saveMeta(state.meta);
+  if (!joint) {
+    state.meta = { ...state.meta, lastExportAt: new Date().toISOString() };
+    await saveMeta(state.meta);
+  }
   // Redraw the settings dialog BEFORE toasting: toast() parents the toast
   // element into the topmost open dialog, and renderSettings() wipes that
   // dialog's children via replaceChildren — doing it after would immediately
@@ -2876,17 +3400,31 @@ async function doExport(share) {
 async function doImport(file) {
   try {
     const parsed = parseImport(await file.text());
-    const current = state.ledger.transactions.length;
+    // v0.14: a joint export only ever goes back into the joint account, and a personal one into yours
+    if (isJointLedger(parsed.ledger)) {
+      if (!jointActive()) throw new Error('That is a joint account export. Turn the joint account on (⚙) first, then import it.');
+      const ok = confirm(
+        `Replace the JOINT account’s data on this device with the export from ${when(parsed.exportedAt)}?\n\n` +
+        `This device: ${state.joint.transactions.length} joint entries\nExport file: ${parsed.ledger.transactions.length} entries\n\n` +
+        'The joint Drive file is replaced too on the next sync. Your own accounts aren’t touched.');
+      if (!ok) return;
+      await commitParts({ joint: parsed.ledger });
+      if (isOpen('settingsDialog')) renderSettings();
+      toast(`Imported ${parsed.ledger.transactions.length} joint entries`);
+      return;
+    }
+    const current = state.personal.transactions.length;
     const incoming = parsed.ledger.transactions.length;
     const ok = confirm(
       `Replace this device's data with the export from ${when(parsed.exportedAt)}${parsed.exportedFrom ? ` (${parsed.exportedFrom})` : ''}?\n\n` +
       `This device: ${current} entries\nExport file: ${incoming} entries` +
-      (sync.isEnabled() ? '\n\nDrive sync is on, so the Drive copy (and your other devices) will be replaced too on the next sync.' : ''));
+      (sync.isEnabled() ? '\n\nDrive sync is on, so the Drive copy (and your other devices) will be replaced too on the next sync.' : '') +
+      (jointActive() ? '\n\nThe joint account isn’t touched.' : ''));
     if (!ok) return;
     state.meta = { ...state.meta, lastImportAt: new Date().toISOString(), lastImportFrom: parsed.exportedFrom || file.name };
     await saveMeta(state.meta);
     // keep the ledger's own lastModified so "unexported changes" starts clean
-    await commit(parsed.ledger); // no message yet — see note in doExport about ordering
+    await commitParts({ personal: parsed.ledger }); // no message yet — see note in doExport about ordering
     if (isOpen('settingsDialog')) renderSettings();
     toast(`Imported ${incoming} entries`);
   } catch (err) {
@@ -2907,11 +3445,11 @@ sync.onChange(renderSyncChip);
 // a still-valid sign-in (never opens Google's window by itself).
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && lockIfIdle()) return;
-  if (!state.ledger || !sync.isEnabled()) return;
-  if (document.visibilityState === 'hidden') { clearTimeout(syncTimer); sync.sync(); }
-  else { renderSyncChip(); sync.sync().then(afterSync); }
+  if (!state.ledger || (!sync.isEnabled() && !jointActive())) return;
+  if (document.visibilityState === 'hidden') { clearTimeout(syncTimer); sync.sync(); runJointSync(); }
+  else { renderSyncChip(); syncBoth(); }
 });
-setInterval(() => sync.isEnabled() && renderSyncChip(), 60 * 1000); // sign-in expiry / "Synced hh:mm" freshness
+setInterval(() => (sync.isEnabled() || jointActive()) && renderSyncChip(), 60 * 1000); // sign-in expiry / "Synced hh:mm" freshness
 $('viewBtn').addEventListener('click', () => {
   state.viewMode = isGrid() ? 'list' : 'grid';
   writePref('viewMode', state.viewMode);
@@ -2981,7 +3519,7 @@ async function lockNow(reason = '') {
   clearTimeout(syncTimer);
   try {
     await flushWrites();
-    if (sync.isEnabled() && auth.hasValidToken()) await Promise.race([sync.sync(), new Promise((r) => setTimeout(r, 4000))]);
+    if ((sync.isEnabled() || jointActive()) && auth.hasValidToken()) await Promise.race([Promise.all([sync.sync(), runJointSync()]), new Promise((r) => setTimeout(r, 4000))]);
     await flushWrites();
   } catch { /* the data is saved locally either way */ }
   setVaultKey(null);
@@ -3226,20 +3764,36 @@ async function boot() {
       tokenStoreFor(true);
       $('lockBtn').hidden = false;
     }
-    state.ledger = (await loadLedger()) ?? emptyLedger();
+    state.personal = (await loadLedger()) ?? emptyLedger();
+    recombine();
     state.meta = await loadMeta();
     state.tracker = (await loadTrackerEstimates().catch(() => null)) ?? null;
   } catch (err) {
     app.replaceChildren(h('div', { class: 'card' }, h('h2', {}, 'Storage unavailable'), h('p', {}, `This browser blocked local storage (${err.message}). Private/incognito windows often do this.`)));
     return;
   }
+  // v0.14: the joint account only when switched on here — a problem with it never stops the app
+  try {
+    state.jointSettings = await loadJointSettings();
+    if (state.jointSettings.enabled) {
+      state.joint = (await loadJointLedger()) ?? emptyJointLedger();
+      recombine();
+      jointSync = makeJointEngine();
+      await jointSync.init();
+    }
+  } catch (err) {
+    jointSync = null;
+    state.joint = null;
+    recombine();
+    toast(`Joint account unavailable: ${err.message}`, 'error');
+  }
   render();
   loadHolidays();
   try {
     await sync.init();
-    if (sync.isEnabled()) auth.preload?.(); // ready for a "Tap to sync"
+    if (sync.isEnabled() || jointActive()) auth.preload?.(); // ready for a "Tap to sync"
     renderSyncChip();
-    sync.sync().then(afterSync);
+    syncBoth();
   } catch (err) {
     toast(`Drive sync unavailable: ${err.message}`, 'error');
   }

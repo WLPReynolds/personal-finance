@@ -147,7 +147,7 @@ try:
         check('with an entry today, opens at Mon 5 Oct (at the top, or as far as the page scrolls)', t and t['date'] == '2026-10-05' and (abs(t['gap']) <= 14 or at_bottom), (t, at_bottom))
 
         # switching tab opens that account at today too (Nationwide only has its opening day → top)
-        pg.click('.tab:nth-child(2)'); pg.wait_for_timeout(300)
+        pg.click('.tab:has-text("Nationwide")'); pg.wait_for_timeout(300)
         check('other account with nothing since opening → its Brought forward day', top_day(pg)['date'] == '2026-10-01')
 
         # ---- desktop grid shows the numbers too

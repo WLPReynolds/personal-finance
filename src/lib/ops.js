@@ -9,6 +9,9 @@ import { randomUUID } from './id.js';
 import { createTransfer } from './ledger.js';
 import { calculateRunningBalance } from './balances.js';
 import { cleanEnvelopeConfig, envelopesInUse, validateSplits, fitSplits, isEnvelopeMove, envelopeConfig } from './envelopes.js';
+import { assertNoLoanTransferOut, cleanLimit, isLoan } from './limits.js';
+
+export const ACCOUNT_TYPES = ['current', 'savings', 'credit', 'loan'];
 
 export const SCHEMA_VERSION = '2';
 
@@ -34,11 +37,13 @@ function touch(ledger) {
 
 /**
  * @param {import('../models/schema.js').Ledger} ledger
- * @param {{ name: string, type: 'current'|'savings'|'credit', institution: string, openingBalance: number, openingDate: string }} fields
+ * @param {{ name: string, type: 'current'|'savings'|'credit'|'loan', institution: string, openingBalance: number, openingDate: string, overdraftLimit?: number|null, creditLimit?: number|null }} fields
+ *   v0.14: 'loan' = loan / credit account (stored as a negative balance, shown as owed); limits (pence) are optional
  */
 export function addAccount(ledger, fields) {
   if (!fields.name?.trim()) throw new Error('Account name is required');
   if (!Number.isInteger(fields.openingBalance)) throw new Error('Opening balance must be whole pence');
+  if (fields.type && !ACCOUNT_TYPES.includes(fields.type)) throw new Error('Choose an account type');
   /** @type {import('../models/schema.js').Account} */
   const account = {
     id: randomUUID(),
@@ -57,8 +62,12 @@ export function addAccount(ledger, fields) {
     envelopes: null,
     createdAt: new Date().toISOString(),
   };
+  // v0.14 limits: only set when given, so accounts made by older code stay as they were
+  const limits = cleanLimits(account.type, fields);
+  Object.assign(account, limits);
   if (fields.envelopes) {
     if (account.type === 'credit') throw new Error('A credit card can’t use envelopes');
+    if (isLoan(account)) throw new Error('A loan account can’t use envelopes');
     account.envelopes = cleanEnvelopeConfig(fields.envelopes);
   }
   return { ledger: touch({ ...ledger, accounts: [...ledger.accounts, account] }), account };
@@ -76,16 +85,35 @@ function cleanCreditCard(cc) {
   return { ...cc, paymentDaysAfter: days };
 }
 
+/** v0.14: overdraft limit for current/savings, credit limit for cards; neither on a loan. */
+function cleanLimits(type, fields) {
+  const out = {};
+  if ('overdraftLimit' in fields) out.overdraftLimit = type === 'credit' || type === 'loan' ? null : cleanLimit(fields.overdraftLimit, 'Overdraft limit');
+  if ('creditLimit' in fields) out.creditLimit = type === 'credit' ? cleanLimit(fields.creditLimit, 'Credit limit') : null;
+  return out;
+}
+
 export function updateAccount(ledger, id, fields) {
   const accounts = ledger.accounts.map((a) => {
     if (a.id !== id) return a;
-    const next = { ...a, ...fields };
+    const next = { ...a, ...fields, ...cleanLimits(fields.type ?? a.type, fields) };
+    if (next.type && !ACCOUNT_TYPES.includes(next.type)) throw new Error('Choose an account type');
+    if (isLoan(next) && !isLoan(a)) {
+      // becoming a loan account: nothing may already take money out of it by transfer
+      const out = ledger.transactions.filter((t) => t.accountId === a.id && t.transferId && t.direction === 'debit').length;
+      const items = (ledger.scheduledItems ?? []).filter((r) => r.recordType === 'recurring' && r.kind === 'transfer' && r.accountId === a.id).length;
+      if (out || items) {
+        throw new Error(`${a.name} has ${[out && `${out} transfer${out === 1 ? '' : 's'} out`, items && `${items} recurring transfer${items === 1 ? '' : 's'} out`].filter(Boolean).join(' and ')}. A loan account can’t — change ${out + items === 1 ? 'it' : 'them'} first.`);
+      }
+      if (envelopeConfig(a)) throw new Error('A loan account can’t use envelopes — turn them off first');
+    }
     if (next.type === 'credit' && !next.creditCard) {
       next.creditCard = { statementWorkingDay: null, nextStatementDateOverride: null, statementBalance: 0, paymentDaysAfter: null };
     }
     if (next.creditCard) next.creditCard = cleanCreditCard(next.creditCard);
     if ('envelopes' in fields) {
       if (next.type === 'credit' && fields.envelopes?.list?.length) throw new Error('A credit card can’t use envelopes');
+      if (isLoan(next) && fields.envelopes?.enabled && fields.envelopes?.list?.length) throw new Error('A loan account can’t use envelopes');
       next.envelopes = cleanEnvelopeConfig(fields.envelopes, a.envelopes, envelopesInUse(ledger, a.id));
     }
     return next;
@@ -173,6 +201,7 @@ export function addTransaction(ledger, fields) {
     if (fields.statementMonth) ordered[0] = { ...ordered[0], statementMonth: fields.statementMonth };
     if (ownSplits) ordered[0] = { ...ordered[0], envelopeSplits: ownSplits };
     if (otherSplits) ordered[1] = { ...ordered[1], envelopeSplits: otherSplits };
+    assertNoLoanTransferOut(ledger.accounts, ordered); // v0.14
     return touch({
       ...ledger,
       transactions: [...ledger.transactions, ...ordered],
@@ -224,6 +253,7 @@ export function updateTransaction(ledger, id, fields) {
     }
     return t;
   });
+  assertNoLoanTransferOut(ledger.accounts, transactions.filter((t) => t.transferId === existing.transferId)); // v0.14
   const debitLeg = transactions.find((t) => t.transferId === existing.transferId && t.direction === 'debit');
   const creditLeg = transactions.find((t) => t.transferId === existing.transferId && t.direction === 'credit');
   const transfers = ledger.transfers.map((tr) =>
@@ -345,7 +375,13 @@ export function counterpartOf(ledger, tx) {
  * figure is the negative of its signed balance.
  */
 export function toDisplay(account, signed) {
-  return account.type === 'credit' ? -signed : signed;
+  // v0.14: a loan is stored like a current account (negative = owed) but shown as owed, like a card
+  return account.type === 'credit' || account.type === 'loan' ? -signed : signed;
+}
+
+/** The opening figure as shown (owed for cards and loans). */
+export function displayOpening(account) {
+  return toDisplay(account, signedOpening(account));
 }
 
 export function signedOpening(account) {
@@ -369,7 +405,7 @@ export function accountBalances(ledger) {
   const out = {};
   for (const account of ledger.accounts) {
     const running = accountRunning(ledger, account);
-    out[account.id] = running.length ? running[running.length - 1].runningBalance : account.openingBalance;
+    out[account.id] = running.length ? running[running.length - 1].runningBalance : displayOpening(account);
   }
   return out;
 }

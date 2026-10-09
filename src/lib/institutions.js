@@ -19,6 +19,8 @@ export const INSTITUTIONS = {
   klarna: { label: 'Klarna', colour: '#FFA8CD', accent: null, ink: '#0B051D' },
   // Very: PLACEHOLDER neutral charcoal. No official hex found; replace.
   very: { label: 'Very', colour: '#2B2B2B', accent: null },
+  // v0.14: the joint account with Alison — purple with a people icon (agreed in the first UI decisions)
+  joint: { label: 'Joint', colour: '#7C3AED', accent: null, icon: 'people' },
   other: { label: 'Other', colour: '#6B7280', accent: null },
 };
 

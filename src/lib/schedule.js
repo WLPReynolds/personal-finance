@@ -23,6 +23,7 @@
  * "every N days" has a minimum of 31 — weekly/fortnightly would need
  * occurrences keyed by date instead (not built).
  */
+import { LoanTransferError, assertNoLoanTransferOut } from './limits.js';
 import { randomUUID } from './id.js';
 import { daysInMonth, shiftToWorkingDay } from './workdays.js';
 import { statementConfig, paymentDueDate, statementFor, addMonths as addStatementMonths } from './statements.js';
@@ -477,6 +478,9 @@ function validateItem(f, ledger) {
   }
   if (!['out', 'in', 'transfer'].includes(f.kind)) throw new Error('Choose money out, money in or transfer');
   if (!ledger.accounts.some((a) => a.id === f.accountId)) throw new Error('Choose an account');
+  if (f.kind === 'transfer' && ledger.accounts.find((a) => a.id === f.accountId)?.type === 'loan') {
+    throw new LoanTransferError(ledger.accounts.find((a) => a.id === f.accountId).name); // v0.14
+  }
   if (f.kind === 'transfer') {
     if (!ledger.accounts.some((a) => a.id === f.toAccountId)) throw new Error('Choose the account the money goes to');
     if (f.toAccountId === f.accountId) throw new Error('A transfer needs two different accounts');
@@ -604,6 +608,7 @@ export function confirmOccurrence(ledger, itemId, period, { date, amount, descri
       { ...common, id: `${id}:out`, accountId: item.accountId, direction: 'debit', category: 'Transfer', transferId: id },
       { ...common, id: `${id}:in`, accountId: item.toAccountId, direction: 'credit', category: 'Transfer', transferId: id },
     ].map((t) => ({ ...t, envelopeSplits: legSplits(item, t.accountId, amount, ledger.accounts) }));
+    assertNoLoanTransferOut(ledger.accounts, legs); // v0.14: the account may have become a loan since
     const transfer = { id, fromAccountId: item.accountId, toAccountId: item.toAccountId, amount, date, note: text };
     return touch({
       ...ledger,

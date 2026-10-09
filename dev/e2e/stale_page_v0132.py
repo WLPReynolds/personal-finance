@@ -32,7 +32,7 @@ def add_card(pg, name):
     sels = pg.query_selector_all(f'{A} select'); sels[0].select_option('credit'); sels[1].select_option(label='Monzo Flex')
     pg.fill(f'{A} input.amount-input >> nth=0', '10')
     pg.fill(f'{A} input[placeholder="e.g. 13"]', '1')
-    pg.fill(f'{A} input.amount-input >> nth=2', '8')
+    pg.fill(f'{A} input[placeholder="25"]', '8')  # payment days (by placeholder: v0.14 added limit boxes before it)
     pg.click(f'{A} button[type=submit]')
     return toast_text(pg)
 

@@ -17,6 +17,22 @@ def start_server(port):
 
 ids = itertools.count(1)
 
+# v0.14: the phone now opens on the Summary page. The older suites were written
+# for "opens on the first account", so every browser context opens that way
+# (the ⚙ setting "In the list, open on: First account") unless it's created
+# with new_context(landing_summary=True) — as summary_v014.py does.
+try:
+    from playwright.sync_api._generated import Browser as _Browser
+    _orig_new_context = _Browser.new_context
+    def _new_context(self, *args, landing_summary=False, **kwargs):
+        ctx = _orig_new_context(self, *args, **kwargs)
+        if not landing_summary:
+            ctx.add_init_script("try { localStorage.setItem('ft.phoneLanding', 'account'); } catch (e) {}")
+        return ctx
+    _Browser.new_context = _new_context
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------- Drive emulator
 # In-memory stand-in for the googleapis.com endpoints src/drive.js uses.
 # Attach with: context.route('https://www.googleapis.com/**', handle)

@@ -5,7 +5,7 @@
  * phone still on the old version" problem. Bump VERSION on each deploy
  * anyway so old caches get cleaned up.
  */
-const VERSION = '0.13.2';
+const VERSION = '0.14.0';
 const CACHE = `finance-tracker-${VERSION}`;
 const SHELL = [
   './',
@@ -20,6 +20,9 @@ const SHELL = [
   'src/drive.js',
   'src/lib/sync-engine.js',
   'src/lib/sync-core.js',
+  'src/lib/joint.js',
+  'src/lib/shared-auth.js',
+  'src/lib/limits.js',
   'src/lib/merge.js',
   'src/lib/ops.js',
   'src/lib/schedule.js',

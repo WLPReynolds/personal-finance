@@ -54,13 +54,20 @@ test('dialog "is it open?" checks are null-safe (isOpen), never $(…).open', ()
 });
 
 test('a save only says "Couldn\'t save" when storing failed — screen problems are reported separately', () => {
-  const commit = app.slice(app.indexOf('async function commit('), app.indexOf('\n}\n', app.indexOf('async function commit(')));
-  const saveCatch = commit.slice(commit.indexOf('await saveLedger'), commit.indexOf('return;'));
+  // v0.14: commit() splits personal/joint, then commitParts() stores and redraws
+  const fn = app.slice(app.indexOf('async function commitParts('), app.indexOf('\n}\n', app.indexOf('async function commitParts(')));
+  const stored = fn.indexOf('// ---- stored.');
+  assert.ok(stored > 0, 'commitParts marks where storing ends');
+  const saveCatch = fn.slice(fn.indexOf('await saveLedger'), stored);
+  assert.match(saveCatch, /await saveJointLedger/);
   assert.match(saveCatch, /Couldn't save/);
-  assert.match(saveCatch, /state\.ledger = previous/);
-  const after = commit.slice(commit.indexOf('return;'));
-  assert.doesNotMatch(after, /state\.ledger = previous/, 'a screen problem must not undo the change');
+  assert.match(saveCatch, /restoreParts\(/);
+  const after = fn.slice(stored);
+  assert.doesNotMatch(after, /restoreParts\(|state\.(ledger|personal|joint) =/, 'a screen problem must not undo the change');
   assert.match(after, /scheduleSync\(\)/, 'a saved change still goes to Drive');
+  // and a refused split (a change linking the two files) stores nothing
+  const commit = app.slice(app.indexOf('async function commit('), app.indexOf('\n}\n', app.indexOf('async function commit(')));
+  assert.ok(commit.indexOf('splitLedger') < commit.indexOf('commitParts('), 'split before anything is stored');
 });
 
 test('every app file is in the offline cache list', () => {

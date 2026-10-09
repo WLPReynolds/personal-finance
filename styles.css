@@ -268,7 +268,7 @@ body.mode-grid .topbar { position: static; }
   .topbar-actions { gap: 2px; }
   .topbar-actions .btn-ghost:not(.icon-btn) { padding-left: 10px; padding-right: 10px; }
 }
-@media (max-width: 380px) { .sync-chip svg { display: none; } .brand { font-size: 15px; } }
+@media (max-width: 380px) { .sync-chip > svg { display: none; } .brand { font-size: 15px; } }
 
 /* ---- clash dialog */
 .clash { border: 1px solid var(--line-strong); border-radius: 12px; padding: 8px 12px 10px; margin: 0; display: grid; gap: 6px; }
@@ -510,3 +510,51 @@ li.env-hist-row { cursor: default; }
 .env-set-row input[type=text] { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
 .env-set-row .amount-input { text-align: right; }
 .env-set-hidecheck { font-size: 12.5px; gap: 4px; }
+
+/* ---- v0.14 joint account */
+.people-icon { display: inline-flex; vertical-align: -2px; margin-right: 4px; }
+.people-icon svg { display: block; }
+.swatch-icon { display: inline-flex; align-items: center; justify-content: center; }
+.swatch-icon svg { display: block; }
+.sheet-head .people-icon { color: #7C3AED; }
+.banner-label .people-icon { vertical-align: -1px; }
+/* the joint file's sync state: a small people icon in a coloured disc on the chip */
+.sync-joint {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%; margin-left: -1px; margin-right: -6px;
+  color: #fff; background: #7C3AED; box-shadow: 0 0 0 2px var(--surface);
+}
+.sync-joint svg { display: block; }
+.sync-joint-green { background: #1f9d55; }
+.sync-joint-amber { background: #f0a400; color: #3a2a00; }
+.sync-joint-red { background: var(--danger); }
+.sync-joint-busy { background: #7C3AED; }
+/* phones: the joint dot takes the cloud icon's place, so the top bar keeps its width (57px, one line) */
+@media (max-width: 460px) { .sync-chip.has-joint > svg { display: none; } .sync-chip.has-joint { padding-right: 9px; } }
+@media (max-width: 380px) { .sync-joint { width: 18px; height: 18px; margin-right: -3px; } .sync-chip.has-joint .sync-word { display: none; } }
+.joint-section h3 { display: flex; align-items: center; gap: 2px; }
+.joint-section h3 .people-icon { color: #7C3AED; }
+.joint-setup { display: grid; gap: 10px; margin: 6px 0 10px; padding: 12px; border-radius: 10px; border: 1px solid var(--line-strong); }
+
+/* ---- v0.14 limits: overdraft / credit limit warnings. Amber = into an arranged overdraft; red = overdrawn without one, past the limit, or over a card's credit limit */
+.lim-warn, .lim-alert { font-weight: 700 !important; font-style: normal !important; border-radius: 4px; }
+.lim-warn { color: var(--warn-text) !important; background: var(--warn-bg) !important; }
+.lim-alert { color: #fff !important; background: #b42318 !important; } /* same deep red in both themes: white text stays readable */
+.entry-bal.lim-warn, .entry-bal.lim-alert { padding: 1px 6px; }
+.entry.projected.lim-row { opacity: 0.9; } /* a projected day past a line stays readable */
+/* carried-forward balances (that account didn't change on the row): coloured text, so the fill marks the entry that did it */
+.grid td.lim-text-warn { color: var(--warn-text) !important; font-weight: 600; }
+.grid td.lim-text-alert { color: var(--danger) !important; font-weight: 600; }
+.acc-lim { display: inline-block; margin-top: 3px; padding: 1px 6px; font-size: 11px; white-space: normal; }
+.banner-lim { grid-column: 1 / -1; justify-self: start; margin-top: 4px; padding: 3px 8px; font-size: 13px; }
+
+/* ---- v0.14 phone Summary: every account's header card */
+.summary { padding-top: 4px; }
+.banner-summary { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.banner-summary:active { filter: brightness(0.95); }
+.banner-summary:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+.banner-name { grid-column: 1; display: flex; align-items: center; gap: 2px; font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+.banner-summary .banner-amount { font-size: 26px; }
+.banner-open { grid-column: 2; grid-row: 1 / span 4; align-self: center; font-size: 30px; line-height: 1; opacity: 0.75; padding-left: 8px; }
+.tab-summary .summary-icon { display: inline-flex; color: var(--muted); }
+.tab-summary.tab-active .summary-icon { color: var(--text); }

@@ -25,7 +25,7 @@
  * When every line on the bank statement is ticked, the difference is £0.00
  * ("Balanced"). Nothing is ticked automatically (Wayne's choice).
  */
-import { signedOpening, toDisplay } from './ops.js';
+import { signedOpening, toDisplay, displayOpening } from './ops.js';
 import { sortForBalance } from './balances.js';
 import { statementConfig, statementDate, effectiveStatementMonth, addMonths } from './statements.js';
 
@@ -135,7 +135,7 @@ export function reconcileScope(ledger, account, period, holidays) {
     closingDate,
     fromDate,
     entries,
-    opening: account.openingBalance,
+    opening: displayOpening(account), // v0.14: loans show as owed
     tickedBalance: toDisplay(account, ticked),
     appBalance: toDisplay(account, app),
     tickedCount: entries.filter((e) => e.reconciled).length,

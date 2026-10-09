@@ -60,7 +60,7 @@ try:
         pg.click('#recurringEditDialog .icon-btn'); pg.click('#recurringDialog .sheet-head .icon-btn'); pg.click('#settingsDialog .icon-btn')
 
         # ---- Barclaycard: statements on, entries
-        pg.click('.tab:nth-child(3)'); pg.wait_for_timeout(200)
+        pg.click('.tab:has-text("Barclaycard")'); pg.wait_for_timeout(200)
         pg.click('.banner-edit >> nth=0'); pg.wait_for_selector('#accountDialog[open]')
         pg.fill('#accountDialog input[placeholder="e.g. 13"]', '13')
         pg.click('#accountDialog button[type=submit]'); saved(pg, 'Account updated')
@@ -132,7 +132,7 @@ try:
         pg.click(f'{R} .sheet-head .icon-btn')
 
         # ---- current account by closing date
-        pg.click('.tab:nth-child(1)'); pg.wait_for_timeout(200)
+        pg.click('.tab:has-text("Current Account")'); pg.wait_for_timeout(200)
         add_spend(pg, '12.50', 'Lunch', '2026-10-20')
         pg.click('.banner-rec'); pg.wait_for_selector(f'{R}[open]')
         check('current account: closing date defaults to today', pg.input_value(f'{R} input.recon-period') == '2026-10-25')

@@ -56,7 +56,7 @@ try:
         pg.wait_for_selector('.feed')
 
         # ---- card settings
-        pg.click('.tab:nth-child(3)'); pg.wait_for_timeout(200)
+        pg.click('.tab:has-text("Barclaycard")'); pg.wait_for_timeout(200)
         pg.click('.banner-edit'); pg.wait_for_selector('#accountDialog[open]')
         check('statement settings shown for a credit card', pg.is_visible('#accountDialog .stmt-settings'))
         pg.fill('#accountDialog input[placeholder="e.g. 13"]', '13')

@@ -8,6 +8,9 @@
  * slots in behind loadLedger/saveLedger.
  *   'sync', 'bankHolidays', 'auth' (v0.10), 'vault' (v0.10 lock header),
  *   'trackerEstimates' (v0.11)
+ *   'jointLedger', 'jointSync', 'jointSettings' (v0.14: the joint account's own
+ *   local copy, its own Drive sync state, and this device's on/off switch —
+ *   never mixed with the personal records above)
  */
 import { encryptValue, decryptValue, isEncryptedValue } from './lib/vault.js';
 
@@ -33,7 +36,7 @@ function openDb() {
 // and `vaultKey` holds the data key in memory while unlocked. The lock's
 // header ('vault') is the one record always saved in plain view.
 const VAULT = 'vault';
-const DATA_KEYS = ['ledger', 'meta', 'sync', 'bankHolidays', 'auth', 'trackerEstimates'];
+const DATA_KEYS = ['ledger', 'meta', 'sync', 'bankHolidays', 'auth', 'trackerEstimates', 'jointLedger', 'jointSync', 'jointSettings'];
 let vaultKey = null;
 
 export class LockedError extends Error {
@@ -107,6 +110,21 @@ export const saveAuthCache = (value) => put('auth', value);
 /** v0.11: the ticket tracker's published figures, as last read from Drive (this device only — see lib/tracker-estimates.js). */
 export const loadTrackerEstimates = () => get('trackerEstimates');
 export const saveTrackerEstimates = (value) => put('trackerEstimates', value);
+
+/** v0.14 joint account (lib/joint.js). Separate records, so the personal ones are never touched by joint code. */
+export const loadJointLedger = () => get('jointLedger');
+export const saveJointLedger = (ledger) => put('jointLedger', ledger);
+export const loadJointSyncState = () => get('jointSync');
+export const saveJointSyncState = (s) => put('jointSync', s);
+/** This device's switch: { enabled } — never synced. */
+export const loadJointSettings = async () => (await get('jointSettings')) ?? { enabled: false };
+export const saveJointSettings = (value) => put('jointSettings', value);
+/** "Remove joint data from this device": the local copy and its sync state (Drive untouched). */
+export async function removeJointData() {
+  const run = writeChain.then(() => rawPutMany([['jointLedger', undefined], ['jointSync', undefined]]));
+  writeChain = run.catch(() => {});
+  return run;
+}
 
 export const loadVaultHeader = () => rawGet(VAULT);
 
