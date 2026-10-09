@@ -11,7 +11,8 @@
  *    exactly like a current account — a negative balance — so an older version
  *    still shows the right figure; only the DISPLAY flips to "Owed £x". Money
  *    can't be transferred out of one (the one hard block); charges/interest
- *    are ordinary entries. No limits apply.
+ *    are ordinary entries. No limits apply. v0.14.1: envelopes allowed (one
+ *    loan can hold several "reasons" to borrow), their figures shown as owed.
  *
  * These are WARNINGS, never blocks: on saving, a change that makes an
  * account's balance cross one of those lines, within the dates shown on

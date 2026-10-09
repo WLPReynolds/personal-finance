@@ -188,6 +188,46 @@ try:
         check('converted: stored amount unchanged (-600.00), shown "Owed £600.00"', v['type'] == 'loan' and v['openingBalance'] == -60000 and 'Owed £600.00' in pg.text_content(f'.acc-head >> nth={vi} >> .acc-total'))
         check('a loan never raises an overdraft warning', not any('Very' in d for d in dialogs), dialogs)
 
+        # ---- v0.14.1: a loan with envelopes (Wayne's Klarna / Monzo Flex: several reasons to borrow on one account)
+        pg.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
+        pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
+        pg.click('#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector('#accountDialog[open]')
+        A = '#accountDialog'
+        pg.fill(f'{A} input[placeholder="e.g. Monzo"]', 'Klarna')
+        pg.fill(f'{A} .field-pair:has-text("Opening balance") .amount-input', '-300.00')
+        pg.fill(f'{A} input[type=date]', '2026-10-01')
+        pg.check(f'{A} .env-settings input[type=checkbox]')
+        pg.fill(f'{A} .env-set-row >> nth=0 >> .env-set-name', 'Sofa'); pg.fill(f'{A} .env-set-row >> nth=0 >> .env-set-open', '-200.00')
+        pg.click(f'{A} button:has-text("+ Add envelope")')
+        pg.fill(f'{A} .env-set-row >> nth=1 >> .env-set-name', 'Laptop'); pg.fill(f'{A} .env-set-row >> nth=1 >> .env-set-open', '-100.00')
+        pg.click(f'{A} button[type=submit]'); pg.wait_for_timeout(600)
+        pg.wait_for_selector(f'{A}[open]', state='detached')
+        pg.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
+        pg.wait_for_function('() => [...document.querySelectorAll(".acc-head .acc-name")].some(e => e.textContent === "Klarna")', timeout=5000)
+        ki = [i for i, n in enumerate(pg.eval_on_selector_all('.acc-head .acc-name', 'els => els.map(e => e.textContent)')) if n == 'Klarna'][0]
+        open_account(pg, ki)
+        check('loan: envelope settings offered', pg.is_visible(f'{A} .env-settings'))
+        pg.select_option(f'{A} select >> nth=0', 'loan')
+        flipped = pg.eval_on_selector_all(f'{A} .env-set-open', 'els => els.map(e => e.value)')
+        check('switching to Loan flips the envelopes to amounts owed too', flipped == ['200.00', '100.00'] and pg.input_value(f'{A} .field-pair:has-text("Amount owed") .amount-input') == '300.00', flipped)
+        summ = pg.text_content(f'{A} .env-set-summary')
+        check('envelope summary adds up in owed terms (nothing unallocated)', 'Unallocated £0.00' in summ, summ)
+        save_account(pg)
+        k = [a for a in ledger(pg)['accounts'] if a['name'] == 'Klarna'][0]
+        check('converted: account and envelope figures stored unchanged', k['type'] == 'loan' and k['openingBalance'] == -30000 and [e['openingBalance'] for e in k['envelopes']['list']] == [-20000, -10000], [e['openingBalance'] for e in k['envelopes']['list']])
+        pg.wait_for_function('(i) => /Owed £300.00/.test(document.querySelectorAll(".acc-head")[i].textContent)', arg=ki, timeout=5000)
+        hd = pg.text_content(f'.acc-head >> nth={ki}')
+        check('grid header: Owed £300.00, Sofa £200.00, Laptop £100.00 (as owed, not minus)', 'Owed £300.00' in hd and 'Sofa£200.00' in hd.replace(' ', '') and 'Laptop£100.00' in hd.replace(' ', ''), hd)
+        # a repayment into one envelope brings it down
+        head(pg, 0).locator('.acc-add').click(); pg.wait_for_selector('#txDialog[open]')
+        pg.fill('#txDialog .amount-input', '50.00'); pg.fill('#txDialog input[placeholder="e.g. Lottery"]', 'Klarna repayment'); pg.fill('#txDialog input[type=date]', '2026-10-08')
+        pg.select_option('#txDialog .field select >> nth=0', label='Klarna')
+        pg.select_option('#txDialog .env-select', label='Sofa')
+        pg.click('#txDialog button[type=submit]'); pg.wait_for_selector('#txDialog[open]', state='detached')
+        pg.wait_for_function('(i) => /Owed £250.00/.test(document.querySelectorAll(".acc-head")[i].textContent)', arg=ki, timeout=5000)
+        hd = pg.text_content(f'.acc-head >> nth={ki}').replace(' ', '')
+        check('repayment into Sofa: owed £250, Sofa £150', 'Owed£250.00' in hd and 'Sofa£150.00' in hd, hd)
+
         # ---- phone: banner line + flagged balances
         ph = device(b, 390, 844, True)
         # same browser storage? no — separate context; import by export instead

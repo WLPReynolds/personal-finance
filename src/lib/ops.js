@@ -67,7 +67,6 @@ export function addAccount(ledger, fields) {
   Object.assign(account, limits);
   if (fields.envelopes) {
     if (account.type === 'credit') throw new Error('A credit card can’t use envelopes');
-    if (isLoan(account)) throw new Error('A loan account can’t use envelopes');
     account.envelopes = cleanEnvelopeConfig(fields.envelopes);
   }
   return { ledger: touch({ ...ledger, accounts: [...ledger.accounts, account] }), account };
@@ -105,7 +104,6 @@ export function updateAccount(ledger, id, fields) {
       if (out || items) {
         throw new Error(`${a.name} has ${[out && `${out} transfer${out === 1 ? '' : 's'} out`, items && `${items} recurring transfer${items === 1 ? '' : 's'} out`].filter(Boolean).join(' and ')}. A loan account can’t — change ${out + items === 1 ? 'it' : 'them'} first.`);
       }
-      if (envelopeConfig(a)) throw new Error('A loan account can’t use envelopes — turn them off first');
     }
     if (next.type === 'credit' && !next.creditCard) {
       next.creditCard = { statementWorkingDay: null, nextStatementDateOverride: null, statementBalance: 0, paymentDaysAfter: null };
@@ -113,7 +111,6 @@ export function updateAccount(ledger, id, fields) {
     if (next.creditCard) next.creditCard = cleanCreditCard(next.creditCard);
     if ('envelopes' in fields) {
       if (next.type === 'credit' && fields.envelopes?.list?.length) throw new Error('A credit card can’t use envelopes');
-      if (isLoan(next) && fields.envelopes?.enabled && fields.envelopes?.list?.length) throw new Error('A loan account can’t use envelopes');
       next.envelopes = cleanEnvelopeConfig(fields.envelopes, a.envelopes, envelopesInUse(ledger, a.id));
     }
     return next;

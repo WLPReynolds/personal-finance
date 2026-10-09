@@ -58,7 +58,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.0';
+export const APP_VERSION = '0.14.1';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -233,6 +233,9 @@ function directionWords(account) {
 }
 
 // ------------------------------------------------------------------ v0.14 limits: overdraft, credit limit
+
+/** v0.14.1: envelope figures on a loan read as amounts owed, like its header (stored signed, as before). */
+const envShow = (account, v) => (isLoan(account) ? -v : v);
 
 /** CSS class for a balance past one of the account's lines: amber = into the overdraft, red = the rest. */
 function limitClass(account, display) {
@@ -2499,7 +2502,7 @@ function openMoveDialog({ accountId, txId = null, fromId, toId }) {
   const bal = envelopeBalances(state.ledger, account, todayIso());
   const balOf = (id) => (id === UNALLOCATED ? bal.unallocated : bal.byId[id] ?? 0);
   const ids = [...envelopeList(account).map((e) => e.id), ''];
-  const option = (id, selected) => h('option', { value: id, selected: id === selected }, `${envelopeName(account, id || null)} · ${formatPence(balOf(id || null))}`);
+  const option = (id, selected) => h('option', { value: id, selected: id === selected }, `${envelopeName(account, id || null)} · ${formatPence(envShow(account, balOf(id || null)))}${isLoan(account) ? ' owed' : ''}`);
   const from = h('select', {}, ids.map((id) => option(id, existing ? al.from ?? '' : fromId ?? ids[0])));
   const to = h('select', {}, ids.map((id) => option(id, existing ? al.to ?? '' : toId ?? ids[1] ?? '')));
   const amount = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input big', placeholder: '0.00', value: existing ? penceToInput(al.amount) : '' });
@@ -2570,8 +2573,8 @@ function renderEnvelopeDialog() {
     const shown = envelopeList(account, { includeHidden: true }).filter((e) => !e.hidden || now.byId[e.id] || end.byId[e.id]);
     const line = (id, name, a, b, extra = null, cls = '') => h('tr', { class: `clickable ${cls}`, onclick: () => { state.envView = { accountId, envelopeId: id }; renderEnvelopeDialog(); } },
       h('td', {}, name, extra),
-      h('td', { class: `num ${a < 0 ? 'neg' : ''}` }, formatPence(a)),
-      h('td', { class: `num muted ${b < 0 ? 'neg' : ''}` }, formatPence(b)));
+      h('td', { class: `num ${envShow(account, a) < 0 ? 'neg' : ''}` }, formatPence(envShow(account, a))),
+      h('td', { class: `num muted ${envShow(account, b) < 0 ? 'neg' : ''}` }, formatPence(envShow(account, b))));
     const table = h('table', { class: 'env-table' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Envelope'), h('th', { class: 'num' }, 'Today'), h('th', { class: 'num' }, `End of ${monthYearLabel(eomIso)}`))),
       h('tbody', {},
@@ -2579,7 +2582,7 @@ function renderEnvelopeDialog() {
         line(UNALLOCATED, 'Unallocated', now.unallocated, end.unallocated,
           waiting.length ? h('span', { class: 'env-waiting' }, ` · ${waiting.length} ${waiting.length === 1 ? 'entry' : 'entries'} to assign`) : null,
           waiting.length || now.unallocated ? 'env-unalloc-row' : 'muted')),
-      h('tfoot', {}, h('tr', {}, h('td', {}, account.name), h('td', { class: 'num' }, formatPence(now.total)), h('td', { class: 'num muted' }, formatPence(end.total)))));
+      h('tfoot', {}, h('tr', {}, h('td', {}, account.name), h('td', { class: 'num' }, formatPence(envShow(account, now.total))), h('td', { class: 'num muted' }, formatPence(envShow(account, end.total))))));
     dlg.replaceChildren(h('div', { class: 'sheet-body' },
       h('header', { class: 'sheet-head', style: { '--acc': s.colour } }, swatch(account), h('h2', {}, `Envelopes · ${account.name}`), close),
       table,
@@ -2598,7 +2601,7 @@ function renderEnvelopeDialog() {
       h('span', { class: 'env-hist-date' }, shortDate(account.openingDate)),
       h('span', { class: 'env-hist-desc' }, 'Brought forward'),
       h('span', { class: 'env-hist-amt' }, ''),
-      h('span', { class: 'env-hist-bal' }, formatPence(hist.opening))));
+      h('span', { class: 'env-hist-bal' }, formatPence(envShow(account, hist.opening)))));
   for (const { transaction: t, change, balance } of hist.rows) {
     const p = t.isProjected ? t.projection : null;
     const move = isEnvelopeMove(t);
@@ -2610,8 +2613,8 @@ function renderEnvelopeDialog() {
     },
       h('span', { class: 'env-hist-date' }, shortDate(t.date)),
       h('span', { class: 'env-hist-desc' }, p ? '↻ ' : '', move ? '⇄ ' : '', t.description || '(no description)', h('span', { class: 'muted' }, split)),
-      h('span', { class: `env-hist-amt ${change > 0 ? 'credit' : ''}` }, `${change > 0 ? '+' : '−'}${formatPence(Math.abs(change))}`),
-      h('span', { class: `env-hist-bal ${balance < 0 ? 'neg' : ''}` }, p?.skipped ? 'skipped' : formatPence(balance)))));
+      h('span', { class: `env-hist-amt ${change > 0 ? 'credit' : ''}` }, `${envShow(account, change) > 0 ? '+' : '−'}${formatPence(Math.abs(change))}`),
+      h('span', { class: `env-hist-bal ${envShow(account, balance) < 0 ? 'neg' : ''}` }, p?.skipped ? 'skipped' : formatPence(envShow(account, balance))))));
   }
   const isUnalloc = envelopeId === UNALLOCATED;
   dlg.replaceChildren(h('div', { class: 'sheet-body' },
@@ -2619,8 +2622,8 @@ function renderEnvelopeDialog() {
       h('button', { type: 'button', class: 'btn-ghost env-back', onclick: () => { state.envView = { accountId, envelopeId: undefined }; renderEnvelopeDialog(); } }, '‹ All'),
       h('h2', {}, name), close),
     h('div', { class: 'recon-summary' },
-      h('div', { class: 'recon-line' }, h('span', {}, 'Today'), h('strong', { class: (isUnalloc ? now.unallocated : now.byId[envelopeId]) < 0 ? 'neg' : '' }, formatPence(isUnalloc ? now.unallocated : now.byId[envelopeId]))),
-      h('div', { class: 'recon-line muted' }, h('span', {}, `End of ${monthYearLabel(eomIso)}`), h('span', {}, formatPence(isUnalloc ? end.unallocated : end.byId[envelopeId])))),
+      h('div', { class: 'recon-line' }, h('span', {}, isLoan(account) ? 'Owed today' : 'Today'), h('strong', { class: envShow(account, isUnalloc ? now.unallocated : now.byId[envelopeId]) < 0 ? 'neg' : '' }, formatPence(envShow(account, isUnalloc ? now.unallocated : now.byId[envelopeId])))),
+      h('div', { class: 'recon-line muted' }, h('span', {}, `End of ${monthYearLabel(eomIso)}`), h('span', {}, formatPence(envShow(account, isUnalloc ? end.unallocated : end.byId[envelopeId]))))),
     isUnalloc && waiting.length ? h('p', { class: 'warn small' }, `${waiting.length} ${waiting.length === 1 ? 'entry is' : 'entries are'} not in an envelope yet — click one to choose its envelope.`) : null,
     hist.rows.length ? list : h('p', { class: 'muted' }, 'Nothing in this envelope yet.'),
     h('div', { class: 'sheet-actions' },
@@ -2640,10 +2643,10 @@ function envHeaderBlock(account, today) {
   const waiting = unallocatedEntries(state.ledger, account).length;
   return h('button', { type: 'button', class: 'acc-env', title: 'Envelopes — click for each one’s entries', onclick: () => openEnvelopeDialog(account.id) },
     envelopeList(account).map((e) => h('span', { class: 'acc-env-line' },
-      h('span', { class: 'acc-env-name' }, e.name), h('span', { class: `acc-env-amt ${b.byId[e.id] < 0 ? 'neg' : ''}` }, formatPence(b.byId[e.id])))),
+      h('span', { class: 'acc-env-name' }, e.name), h('span', { class: `acc-env-amt ${envShow(account, b.byId[e.id]) < 0 ? 'neg' : ''}` }, formatPence(envShow(account, b.byId[e.id]))))),
     b.unallocated || waiting ? h('span', { class: 'acc-env-line env-unalloc' },
       h('span', { class: 'acc-env-name' }, waiting ? `Unallocated (${waiting} to assign)` : 'Unallocated'),
-      h('span', { class: 'acc-env-amt' }, formatPence(b.unallocated))) : null);
+      h('span', { class: 'acc-env-amt' }, formatPence(envShow(account, b.unallocated)))) : null);
 }
 
 /** Envelope chips in the phone banner — tap for the breakdown. */
@@ -2653,16 +2656,18 @@ function envBannerBlock(account, today) {
   const waiting = unallocatedEntries(state.ledger, account).length;
   return h('div', { class: 'banner-env' },
     envelopeList(account).map((e) => h('button', { type: 'button', class: 'env-chip', onclick: () => openEnvelopeDialog(account.id, e.id) },
-      h('span', {}, e.name), h('strong', {}, formatPence(b.byId[e.id])))),
+      h('span', {}, e.name), h('strong', {}, formatPence(envShow(account, b.byId[e.id]))))),
     b.unallocated || waiting ? h('button', { type: 'button', class: 'env-chip env-chip-unalloc', onclick: () => openEnvelopeDialog(account.id, UNALLOCATED) },
-      h('span', {}, waiting ? `Unallocated · ${waiting} to assign` : 'Unallocated'), h('strong', {}, formatPence(b.unallocated))) : null,
+      h('span', {}, waiting ? `Unallocated · ${waiting} to assign` : 'Unallocated'), h('strong', {}, formatPence(envShow(account, b.unallocated)))) : null,
     h('button', { type: 'button', class: 'env-chip env-chip-more', onclick: () => openEnvelopeDialog(account.id) }, 'Envelopes ›'));
 }
 
 /** The envelopes part of the account dialog. */
 function envelopeSettings(existing) {
   const inUse = existing ? envelopesInUse(state.ledger, existing.id) : new Set();
-  let rows = (existing?.envelopes?.list ?? []).map((e) => ({ ...e }));
+  // v0.14.1: on a loan the boxes show (and take) amounts owed; stored signed as before
+  const signedText = (p) => (p ? `${p < 0 ? '-' : ''}${penceToInput(Math.abs(p))}` : '');
+  let rows = (existing?.envelopes?.list ?? []).map((e) => ({ ...e, openingText: signedText(isLoan(existing) ? -(e.openingBalance ?? 0) : e.openingBalance ?? 0) }));
   const on = h('input', { type: 'checkbox', checked: Boolean(envelopeConfig(existing)) });
   const list = h('div', { class: 'env-set-rows' });
   const summary = h('div', { class: 'muted small env-set-summary' });
@@ -2700,7 +2705,7 @@ function envelopeSettings(existing) {
   }
   function updateSummary() {
     readRows();
-    const opening = openingInput ? readSigned(openingInput.value) : existing?.openingBalance ?? 0;
+    const opening = openingInput ? readSigned(openingInput.value) : existing ? envShow(existing, existing.openingBalance) : 0;
     const inEnv = rows.reduce((s, r) => s + (readSigned(r.openingText ?? (r.openingBalance ? penceToInput(r.openingBalance) : '')) ?? 0), 0);
     summary.textContent = opening === null ? '' : `Opening balance ${formatPence(opening)} · in envelopes ${formatPence(inEnv)} · Unallocated ${formatPence(opening - inEnv)}`;
   }
@@ -2721,13 +2726,23 @@ function envelopeSettings(existing) {
   return {
     el,
     watchOpening(input) { openingInput = input; input.addEventListener('input', updateSummary); updateSummary(); },
-    /** { envelopes } for updateAccount/addAccount, or { error } */
-    value() {
+    /** v0.14.1: the dialog's type switched to or from a loan — flip every envelope's figure so it keeps meaning the same money */
+    flip() {
+      readRows();
+      for (const r of rows) {
+        const t = (r.openingText ?? '').trim();
+        if (t) r.openingText = t.startsWith('-') ? t.slice(1) : `-${t}`;
+      }
+      draw();
+    },
+    /** { envelopes } for updateAccount/addAccount, or { error }. asLoan: the boxes hold amounts owed */
+    value(asLoan = false) {
       readRows();
       const list2 = [];
       for (const r of rows) {
-        const opening = readSigned(r.openingText ?? (r.openingBalance ? penceToInput(r.openingBalance) : ''));
-        if (opening === null) return { error: `Opening amount for ${r.name || 'an envelope'} should look like 123.45` };
+        const shown = readSigned(r.openingText ?? (r.openingBalance ? penceToInput(r.openingBalance) : ''));
+        if (shown === null) return { error: `Opening amount for ${r.name || 'an envelope'} should look like 123.45` };
+        const opening = asLoan && shown ? -shown : shown;
         if (!r.name.trim() && !opening && !inUse.has(r.id)) continue; // an empty row left over
         list2.push({ id: r.id, name: r.name, openingBalance: opening, hidden: Boolean(r.hidden) });
       }
@@ -2803,14 +2818,15 @@ function openAccountDialog(accountId) {
   let shownType = type.value;
   const syncType = () => {
     // v0.14: switching to or from a loan flips the figure, so it keeps meaning the same money
-    if ((shownType === 'loan') !== (type.value === 'loan') && opening.value.trim()) {
+    if ((shownType === 'loan') !== (type.value === 'loan')) {
       const raw = opening.value.trim();
-      opening.value = raw.startsWith('-') ? raw.slice(1) : `-${raw}`;
+      if (raw) opening.value = raw.startsWith('-') ? raw.slice(1) : `-${raw}`;
+      envSettings.flip(); // the envelopes' figures too (v0.14.1)
     }
     shownType = type.value;
     openingLabel.textContent = type.value === 'credit' || type.value === 'loan' ? 'Amount owed at opening date (£)' : 'Opening balance (£)';
     stmtSection.hidden = type.value !== 'credit';
-    envSettings.el.hidden = type.value === 'credit' || type.value === 'loan' || isJoint;
+    envSettings.el.hidden = type.value === 'credit' || isJoint;
     overdraftField.hidden = type.value === 'credit' || type.value === 'loan';
     creditLimitField.hidden = type.value !== 'credit';
     loanNote.hidden = type.value !== 'loan';
@@ -2848,8 +2864,8 @@ function openAccountDialog(accountId) {
           statementWorkingDay: wd,
           paymentDaysAfter: wd === null ? cc?.paymentDaysAfter ?? null : days,
         };
-      } else if (!isJoint && type.value !== 'loan') {
-        const env = envSettings.value();
+      } else if (!isJoint) {
+        const env = envSettings.value(type.value === 'loan');
         if (env.error) return toast(env.error, 'error');
         fields.envelopes = env.envelopes;
       }
@@ -2915,7 +2931,7 @@ function ticketSection() {
   const rec = ticketSettingsRecord(l);
   const own = l.accounts.filter((a) => !isJointAccount(a)); // v0.14: ticket purchases are personal only
   const cards = own.filter((a) => a.type === 'credit' && statementConfig(a));
-  const envOptions = own.filter((a) => envelopeConfig(a)).flatMap((a) => envelopeList(a).map((e) => ({ value: `${a.id}|${e.id}`, label: `${e.name} · ${a.name}`, name: e.name })));
+  const envOptions = own.filter((a) => envelopeConfig(a) && !isLoan(a)).flatMap((a) => envelopeList(a).map((e) => ({ value: `${a.id}|${e.id}`, label: `${e.name} · ${a.name}`, name: e.name })));
   const plain = own.filter((a) => a.type !== 'credit' && !isLoan(a) && a.active);
   const intro = h('p', { class: 'muted small' }, 'Puts each ticket the ticket tracker says you’ve bought — or will buy — on the card on its purchase day, with the same amount ring-fenced from your envelope, and moved back the day before the card is paid.');
   if (!cards.length || !envOptions.length || plain.length < 2) {

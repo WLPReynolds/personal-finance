@@ -8,6 +8,7 @@ import {
 } from '../ops.js';
 import { addRecurring, setOccurrence, withProjections } from '../schedule.js';
 import { reconcileScope } from '../reconcile.js';
+import { envelopeBalances } from '../envelopes.js';
 import {
   balanceLevel, balanceProblems, newLimitProblems, isLoan, showsOwed, LoanTransferError, cleanLimit,
 } from '../limits.js';
@@ -166,6 +167,30 @@ test('changing an account into a loan: refused while something transfers out of 
   const withOut = addTransaction(r.ledger, { accountId: very.id, date: '2026-10-05', amount: 100, direction: 'debit', description: 'x', counterpartAccountId: s.current.id });
   assert.throws(() => updateAccount(withOut, very.id, { type: 'loan' }), /1 transfer out/);
 });
+test('v0.14.1: a loan can use envelopes; converting an envelope account keeps every figure', () => {
+  const s = setup();
+  let r = addAccount(s.ledger, { name: 'Klarna', type: 'current', institution: 'klarna', openingBalance: -30000, openingDate: '2026-10-01',
+    envelopes: { enabled: true, list: [{ id: 'sofa', name: 'Sofa', openingBalance: -20000, hidden: false }, { id: 'laptop', name: 'Laptop', openingBalance: -10000, hidden: false }] } });
+  const k = r.account;
+  let l = addTransaction(r.ledger, { accountId: s.current.id, date: '2026-10-09', amount: 5000, direction: 'debit', description: 'Klarna repayment',
+    counterpartAccountId: k.id, counterpartEnvelopeSplits: [{ envelopeId: 'sofa', amount: 5000 }] });
+  const before = envelopeBalances(l, k, '2026-10-31');
+  const converted = updateAccount(l, k.id, { type: 'loan' });
+  const loan = converted.accounts.find((a) => a.id === k.id);
+  assert.equal(loan.type, 'loan');
+  assert.deepEqual(loan.envelopes, k.envelopes, 'envelopes kept exactly');
+  assert.deepEqual(envelopeBalances(converted, loan, '2026-10-31'), before, 'stored envelope figures unchanged');
+  assert.equal(before.byId.sofa, -15000, 'Sofa still owes £150 (shown as owed)');
+  assert.equal(balanceAsOf(converted, loan, '2026-10-31'), 25000, 'account shown as owed £250');
+  // a new loan with envelopes, and a charge into one envelope
+  const n = addAccount(s.ledger, { name: 'Flex', type: 'loan', institution: 'monzoflex', openingBalance: -10000, openingDate: '2026-10-01',
+    envelopes: { enabled: true, list: [{ id: 'tv', name: 'TV', openingBalance: -10000, hidden: false }] } });
+  const withCharge = addTransaction(n.ledger, { accountId: n.account.id, date: '2026-10-20', amount: 500, direction: 'debit', description: 'Late fee', envelopeSplits: [{ envelopeId: 'tv', amount: 500 }] });
+  assert.equal(envelopeBalances(withCharge, n.account, '2026-10-31').byId.tv, -10500);
+  // still no transfers out, envelopes or not
+  assert.throws(() => addTransaction(converted, { accountId: k.id, date: '2026-10-10', amount: 100, direction: 'debit', description: 'x', counterpartAccountId: s.current.id, envelopeSplits: [{ envelopeId: 'sofa', amount: 100 }] }), LoanTransferError);
+});
+
 test('reconciling a loan compares the amount owed', () => {
   const s = setup();
   const scope = reconcileScope(s.ledger, s.loan, { toDate: '2026-10-31' }, HOL);

@@ -4,7 +4,17 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.14.0 — the joint account, on its own Drive file (stage 1: Wayne only)
+## Status: v0.14.1 — envelopes on loan / credit accounts (v0.14.0: joint account file, limits, phone Summary)
+
+**v0.14.1:** a loan / credit account can have **envelopes**, so one account
+(Klarna, Monzo Flex) can hold several reasons for borrowing. The envelope
+figures read as amounts owed, like the header ("Sofa £200.00", not
+−£200.00), in the chips, grid header, Envelopes view and move dialog. In
+Account…, switching an account to Loan flips the envelopes' figures along with
+the account's, and nothing stored changes. Repayments can go into one
+envelope. Transfers out stay blocked. A loan is never offered as ticket
+purchases' envelope account.
+
 
 Everything from v0.4, plus **recurring items** (salary, direct debits,
 subscriptions, card payments) that appear ahead of time as projected entries,
@@ -64,7 +74,8 @@ and (v0.7) **card statements**.
   negative balance it always was, so an older version still shows the right
   figure. To convert an account: Account… → Type → Loan / credit account. The
   figure flips to the amount owed and no amounts change. This is refused if
-  anything already transfers money out of it.
+  anything already transfers money out of it. (v0.14.1: envelopes are
+  allowed on a loan.)
 - **Phone Summary page.** In the list view the app opens on **Summary**,
   the first tab. It shows each visible account's header card (balance today,
   end of month, statement line, limit warning, envelope chips) under its
