@@ -131,6 +131,34 @@ try:
         check('card header flags it', 'Over credit limit' in (pg.text_content('.acc-head >> nth=2 >> .acc-lim') or ''))
         pg.screenshot(path=f'{OUT}/v014-limits-1-grid.png')
 
+        # ---- v0.14.1 (Wayne, 9 Oct): a big card spend also warned about the current account, without saying why.
+        # The card is paid from Current Account by a "pay the statement balance" item: name that as the knock-on cause.
+        open_account(pg, 2)
+        pg.fill('#accountDialog input[placeholder="e.g. 13"]', '13')
+        save_account(pg)
+        pg.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
+        pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
+        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#recurringDialog button:has-text("+ Add")'); pg.wait_for_selector('#recurringEditDialog[open]')
+        pg.fill(f'{ed} input[placeholder="e.g. Netflix"]', 'Barclaycard payment')
+        pg.click(f'{ed} .seg-btn:has-text("Transfer")')
+        pg.locator(f'{ed} select').nth(0).select_option(label='Current Account')
+        pg.locator(f'{ed} select').nth(1).select_option(label='Barclaycard')
+        pg.check(f'{ed} label.check:has-text("Pay the statement balance") input')
+        pg.locator(f'{ed} input[type=date]').first.fill('2026-10-01')
+        dialogs.clear()
+        pg.click(f'{ed} button[type=submit]'); pg.wait_for_selector(f'{ed}[open]', state='detached')
+        pg.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
+        dialogs.clear(); answer['accept'] = False  # Cancel: a test spend, not to be saved
+        entry(pg, 2, '9999.99', 'Test spend', '2026-10-09')
+        pg.wait_for_timeout(300)
+        answer['accept'] = True
+        m = dialogs[-1] if dialogs else ''
+        check('big card spend: the card itself first', m.startswith('⚠ Barclaycard goes OVER its £2,600.00 credit limit'), m)
+        check('…then the current account as a knock-on, naming the card payment', 'this also affects another account' in m and 'Current Account goes' in m and 'from “Barclaycard payment” (projected)' in m, m)
+        check('Cancel: not saved, the form still open', pg.is_visible('#txDialog[open]') and 'Test spend' not in grid_text(pg))
+        pg.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
+
         # ---- loan / credit account
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
         pg.click('#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector('#accountDialog[open]')

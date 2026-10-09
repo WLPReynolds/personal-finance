@@ -58,7 +58,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.1';
+export const APP_VERSION = '0.14.2';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -245,8 +245,15 @@ function limitClass(account, display) {
 function dayText(iso) {
   return iso === todayIso() ? 'today' : new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 }
-function limitLine(p) {
+function limitLine(p, knockOn = false) {
   const n = p.account.name;
+  // v0.14.1: a warning about a different account says which entry causes it (e.g. a card's statement payment)
+  const why = knockOn && p.cause?.description ? ` — from “${p.cause.description}”${p.cause.isProjected ? ' (projected)' : ''}` : '';
+  // already past that line that day for other reasons: say what it was, so "goes overdrawn" isn't news
+  const was = p.was !== null && p.was !== undefined ? ` (was ${formatPence(p.was)}${p.account.type === 'credit' ? ' owed' : ''})` : '';
+  return `${limitText(p, n).replace(/\.$/, '')}${was}${why}.`;
+}
+function limitText(p, n) {
   const when = dayText(p.date);
   if (p.level === 'overdrawn') return `${n} goes overdrawn ${when === 'today' ? 'today' : `on ${when}`}: ${formatPence(p.balance)}.`;
   if (p.level === 'overdraft') return `${n} goes into its overdraft ${when === 'today' ? 'today' : `on ${when}`}: ${formatPence(p.balance)} (limit ${formatPence(p.limit)}).`;
@@ -265,12 +272,41 @@ function limitsOK(next) {
     const after = withProjections(next, to, state.holidays, sources());
     const problems = newLimitProblems(before, after, todayIso(), to);
     if (!problems.length) return true;
-    return confirm(`⚠ ${problems.map(limitLine).join('\n⚠ ')}\n\n(Checked to ${longDate(to)} — as far ahead as the screen shows.)\n\nSave anyway?`);
+    // v0.14.1: accounts this change touches directly first; others (e.g. the current account paying a card) as knock-on
+    const direct = changedAccountIds(state.ledger, next);
+    const own = problems.filter((p) => direct.has(p.account.id));
+    const knock = problems.filter((p) => !direct.has(p.account.id));
+    const parts = [];
+    if (own.length) parts.push(own.map((p) => `⚠ ${limitLine(p)}`).join('\n'));
+    if (knock.length) parts.push(`${own.length ? 'Knock-on: ' : ''}${knock.length === 1 ? 'this also affects another account' : 'this also affects other accounts'}:\n${knock.map((p) => `⚠ ${limitLine(p, true)}`).join('\n')}`);
+    return confirm(`${parts.join('\n\n')}\n\n(Checked to ${longDate(to)} — as far ahead as the screen shows.)\n\nSave anyway?`);
   } catch (err) {
     console.error(err); // a problem working out the warning must never stop a save
     return true;
   }
 }
+/** Accounts a change touches itself: their entries, recurring items or settings changed. */
+function changedAccountIds(before, after) {
+  const ids = new Set();
+  const key = (x) => JSON.stringify(x);
+  const byId = (list) => new Map(list.map((x) => [x.id, key(x)]));
+  const txB = byId(before.transactions);
+  const txA = byId(after.transactions);
+  for (const t of after.transactions) if (txB.get(t.id) !== txA.get(t.id)) ids.add(t.accountId);
+  for (const t of before.transactions) if (!txA.has(t.id)) ids.add(t.accountId);
+  const siB = byId(before.scheduledItems);
+  const siA = byId(after.scheduledItems);
+  const itemAccounts = (r) => [r.accountId, r.toAccountId].filter(Boolean);
+  const items = new Map([...before.scheduledItems, ...after.scheduledItems].filter((r) => r.recordType === 'recurring').map((r) => [r.id, r]));
+  for (const r of [...after.scheduledItems, ...before.scheduledItems]) {
+    if (siB.get(r.id) === siA.get(r.id)) continue;
+    for (const id of itemAccounts(r.recordType === 'occurrence' ? items.get(r.itemId) ?? r : r)) ids.add(id);
+  }
+  const accB = byId(before.accounts);
+  for (const a of after.accounts) if (accB.get(a.id) !== key(a)) ids.add(a.id);
+  return ids;
+}
+
 /** Header line: when an account first crosses each line it reaches (today → the end of what's shown). */
 function limitHeaderText(account, view) {
   const pr = balanceProblems(view, account, todayIso(), projectionEnd());

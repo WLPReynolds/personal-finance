@@ -60,7 +60,7 @@ export function balanceProblems(view, account, fromIso, toIso) {
   const points = [{ date: fromIso, balance: balanceAsOf(view, account, fromIso) }];
   for (const r of accountRunning(view, account)) {
     const d = r.transaction.date;
-    if (d > fromIso && d <= toIso && r.transaction.kind !== 'note') points.push({ date: d, balance: r.runningBalance });
+    if (d > fromIso && d <= toIso && r.transaction.kind !== 'note') points.push({ date: d, balance: r.runningBalance, tx: r.transaction });
   }
   const first = {};
   let extreme = null;
@@ -76,28 +76,47 @@ export function balanceProblems(view, account, fromIso, toIso) {
 }
 
 /**
- * The warnings a change should give: for each account whose problems the
- * change CREATES or MAKES WORSE (a worse level, an earlier date, or a lower
- * point). An account already overdrawn in the same way isn't nagged about on
- * every unrelated save.
- * @returns {{ account, level, date, balance, limit }[]} soonest first
+ * The warnings a change should give. Day by day, within the dates shown: a
+ * day counts when the change makes that day's closing balance WORSE (or
+ * reaches a worse line) and it is past a line. For each line, the first such
+ * day is reported, with the entry that does it and the balance it had before.
+ * So an account already overdrawn for other reasons isn't reported on its old
+ * dates, and an unrelated save warns about nothing (v0.14.1, after Wayne's
+ * test: a big card spend's knock-on on the current account named old entries).
+ * @returns {{ account, level, date, balance, was, limit, cause }[]} soonest first
  */
 export function newLimitProblems(beforeView, afterView, fromIso, toIso) {
   const out = [];
   for (const account of afterView.accounts) {
-    const after = balanceProblems(afterView, account, fromIso, toIso);
-    if (!after) continue;
+    if (isLoan(account)) continue;
     const prevAcc = beforeView.accounts.find((a) => a.id === account.id) ?? null;
-    const before = prevAcc ? balanceProblems(beforeView, prevAcc, fromIso, toIso) : null;
-    const made = !before
-      || LEVELS[after.worst].severity > LEVELS[before.worst].severity
-      || Object.keys(after.first).some((lvl) => !before.first[lvl] || after.first[lvl].date < before.first[lvl].date)
-      || worse(account, after.extreme.balance, before.extreme.balance);
-    if (!made) continue;
-    for (const [level, p] of Object.entries(after.first)) {
+    const rows = [{ date: fromIso, tx: null }];
+    for (const r of accountRunning(afterView, account)) {
+      const d = r.transaction.date;
+      if (d > fromIso && d <= toIso && r.transaction.kind !== 'note') rows.push({ date: d, tx: r.transaction });
+    }
+    const first = {};
+    const seen = new Set();
+    for (const row of rows) {
+      if (seen.has(row.date)) continue; // one look per day, at its closing balance
+      seen.add(row.date);
+      const now = balanceAsOf(afterView, account, row.date);
+      const level = balanceLevel(account, now);
+      if (!level || first[level]) continue;
+      const was = prevAcc ? balanceAsOf(beforeView, prevAcc, row.date) : null;
+      const wasLevel = prevAcc ? balanceLevel(prevAcc, was) : null;
+      const madeWorse = was === null || worse(account, now, was) || !wasLevel || LEVELS[level].severity > LEVELS[wasLevel].severity;
+      if (!madeWorse) continue;
+      // the day's entry that does it: the last one on that day in this account (the closing balance's)
+      const dayTxs = rows.filter((r) => r.date === row.date && r.tx).map((r) => r.tx);
+      const cause = dayTxs.at(-1) ?? null;
+      first[level] = { date: row.date, balance: now, was: wasLevel ? was : null, cause };
+    }
+    for (const [level, p] of Object.entries(first)) {
       out.push({
-        account, level, date: p.date, balance: p.balance,
+        account, level, date: p.date, balance: p.balance, was: p.was,
         limit: account.type === 'credit' ? limit(account.creditLimit) : limit(account.overdraftLimit),
+        cause: p.cause,
       });
     }
   }

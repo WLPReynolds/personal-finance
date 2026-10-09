@@ -94,6 +94,37 @@ test('a transfer warns about the account the money comes OUT of', () => {
   const w = newLimitProblems(view(s.ledger), view(l), TODAY, TO);
   assert.deepEqual(w.map((x) => x.account.name), ['Current Account']);
 });
+test('v0.14.1: a big card spend → the knock-on warning on the current account names the card payment as the cause', () => {
+  const s = setup({ creditLimit: 300000 });
+  let l = updateAccount(s.ledger, s.card.id, { creditCard: { ...s.card.creditCard, statementWorkingDay: 13, paymentDaysAfter: 25 } });
+  ({ ledger: l } = addRecurring(l, { description: 'Barclaycard payment', kind: 'transfer', accountId: s.current.id, toAccountId: s.card.id,
+    amount: 0, everyMonths: 1, day: 12, startDate: '2026-10-01', endDate: null, shift: 'after', payStatement: true }));
+  const after = out(l, s.card.id, 99999900, '2026-10-09', 'Test spend');
+  const w = newLimitProblems(view(l), view(after), TODAY, TO);
+  const card = w.find((x) => x.account.id === s.card.id);
+  const cur = w.find((x) => x.account.id === s.current.id);
+  assert.equal(card.level, 'over-credit-limit');
+  assert.equal(card.date, '2026-10-09');
+  assert.equal(cur.level, 'overdrawn');
+  assert.ok(cur.date > '2026-11-01', `on the card payment date, not the spend day (${cur.date})`);
+  assert.equal(cur.cause.description, 'Barclaycard payment');
+  assert.equal(cur.cause.isProjected, true);
+});
+
+test('v0.14.1: already overdrawn for other reasons → the knock-on is reported on the day THIS change makes it worse, with what it was', () => {
+  const s = setup();
+  let l = updateAccount(s.ledger, s.card.id, { creditCard: { ...s.card.creditCard, statementWorkingDay: 13, paymentDaysAfter: 25 } });
+  ({ ledger: l } = addRecurring(l, { description: 'Barclaycard payment', kind: 'transfer', accountId: s.current.id, toAccountId: s.card.id,
+    amount: 0, everyMonths: 1, day: 12, startDate: '2026-10-01', endDate: null, shift: 'after', payStatement: true }));
+  l = out(l, s.current.id, 15000, '2026-10-10', 'Taxi'); // overdrawn from 10 Oct already
+  const after = out(l, s.card.id, 500000, '2026-10-09', 'Test spend');
+  const cur = newLimitProblems(view(l), view(after), TODAY, TO).filter((x) => x.account.id === s.current.id);
+  assert.equal(cur.length, 1);
+  assert.ok(cur[0].date > '2026-11-01', `not the old 10 Oct date (${cur[0].date})`);
+  assert.equal(cur[0].cause.description, 'Barclaycard payment');
+  assert.ok(cur[0].was < 0 && cur[0].balance < cur[0].was, 'reports what it was and how much worse');
+});
+
 test('only warns about what THIS change does: an existing overdrawn day isn’t nagged about on an unrelated save', () => {
   const s = setup();
   const already = out(s.ledger, s.current.id, 15000, '2026-10-20');

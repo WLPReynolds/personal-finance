@@ -4,7 +4,17 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.14.1 — envelopes on loan / credit accounts (v0.14.0: joint account file, limits, phone Summary)
+## Status: v0.14.2 — clearer limit warnings (v0.14.1: envelopes on loans; v0.14.0: joint account file, limits, phone Summary)
+
+**v0.14.2:** a warning about a *different* account from the one you're
+changing is listed as a **knock-on** and names the entry that causes it.
+Example: a big Barclaycard spend → "Knock-on: … Current Account goes PAST its
+overdraft limit on Fri, 13 Nov: −£… (was −£…) — from “Barclaycard payment”
+(projected)." Warnings now compare day by day and report the first day
+**this change** makes a balance worse past a line. An account already
+overdrawn for other reasons is no longer reported on its old dates with the
+wrong entry blamed. "(was …)" shows the balance that day before the change.
+
 
 **v0.14.1:** a loan / credit account can have **envelopes**, so one account
 (Klarna, Monzo Flex) can hold several reasons for borrowing. The envelope
