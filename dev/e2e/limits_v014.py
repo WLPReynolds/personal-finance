@@ -80,6 +80,10 @@ try:
         pg.locator(f'{ed} input[type=date]').first.fill('2026-10-01')
         pg.locator(f'{ed} input[inputmode=numeric]').first.fill('20')
         pg.click(f'{ed} button[type=submit]'); pg.wait_for_selector(f'{ed}[open]', state='detached')
+        # v0.14.3 (Wayne, 9 Oct): the recurring items list showed every amount as £0.00
+        pg.wait_for_selector('#recurringDialog[open] .rec-amt')
+        amts = pg.eval_on_selector_all('#recurringDialog .rec-amt', 'els => els.map(e => e.textContent)')
+        check('recurring items list shows the real amount (not £0.00)', amts == ['−£50.00'], amts)
         pg.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
 
         # ---- Wayne's example: an entry for tomorrow that makes the account negative on 20 Oct

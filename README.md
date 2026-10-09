@@ -4,7 +4,11 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.14.2 — clearer limit warnings (v0.14.1: envelopes on loans; v0.14.0: joint account file, limits, phone Summary)
+## Status: v0.14.3 — fix: recurring items list showed £0.00 (v0.14.2: clearer limit warnings ; v0.14.1: envelopes on loans; v0.14.0: joint account file, limits, phone Summary)
+
+**v0.14.3:** the recurring items list (⚙ → Manage recurring items) showed every
+amount as £0.00. Display only: the stored amounts were always right. It had
+been wrong since v0.11.
 
 **v0.14.2:** a warning about a *different* account from the one you're
 changing is listed as a **knock-on** and names the entry that causes it.

@@ -58,7 +58,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.2';
+export const APP_VERSION = '0.14.3';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -1968,7 +1968,8 @@ function renderRecurringManager() {
     const paid = finished ? lastPaid(item) : '';
     // v0.11: an item on the tracker shows the tracker's figure for its next payment, if it has one
     const trk = item.amountFrom === TRACKER_SOURCE && !itemStatementCard(item);
-    const nextAmount = (trk && next && trackerPeriodFor(state.tracker?.estimates, next.slice(0, 7))?.totalPence) ?? item.amount;
+    // v0.14.2 fix: `(trk && …) ?? amount` gave `false` (not nullish) for every non-tracker item → shown as £0.00
+    const nextAmount = (trk && next ? trackerPeriodFor(state.tracker?.estimates, next.slice(0, 7))?.totalPence : null) ?? item.amount;
     const status = finished
       ? (paid ? `Finished · last payment ${longDate(paid)}` : `Finished · ended ${longDate(item.endDate)}`)
       : next ? `Next: ${longDate(next)}${nextNumberText(item)}`
