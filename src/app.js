@@ -58,7 +58,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.3';
+export const APP_VERSION = '0.14.4';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -75,6 +75,8 @@ const state = {
   // v0.14: on the phone the app opens on the Summary (every account's header card), unless ⚙ says "First account"
   phoneLanding: readPref('phoneLanding', 'summary'), // 'summary' | 'account'
   summary: readPref('phoneLanding', 'summary') === 'summary',
+  // v0.14.4: the recurring items page groups by account (soonest first in each) or lists everything by date
+  recGroup: readPref('recGroup', 'account'), // 'account' | 'date'
   gridScroll: null,
   listScrollToToday: true, // phone list: jump to today on open / account switch, not on every redraw
   installPrompt: null,
@@ -1983,9 +1985,39 @@ function renderRecurringManager() {
       h('span', { class: `rec-amt ${item.kind === 'in' ? 'credit' : ''}` }, itemStatementCard(item) ? 'statement' : signedAmount(item.kind, nextAmount))));
   };
 
+  // v0.14.4: grouped by the account the item belongs to (for a transfer, the one the money leaves), in the
+  // order the accounts are shown elsewhere (joint first); inside a group `active` is already soonest-first.
+  // Account order is the app's own account order; an item whose account has gone sorts last.
+  const activeLists = () => {
+    if (!active.length) return [h('p', { class: 'muted small' }, 'Nothing still running.')];
+    if (state.recGroup !== 'account') return [h('ul', { class: 'rec-list rec-active' }, active.map(row))];
+    const order = new Map(state.ledger.accounts.map((a, i) => [a.id, i]));
+    const groups = new Map();
+    for (const x of active) {
+      if (!groups.has(x.item.accountId)) groups.set(x.item.accountId, []);
+      groups.get(x.item.accountId).push(x);
+    }
+    return [...groups.entries()]
+      .sort(([a], [b]) => (order.get(a) ?? 9999) - (order.get(b) ?? 9999))
+      .flatMap(([accountId, rows]) => {
+        const acc = accountById(accountId);
+        return [
+          h('h3', { class: 'rec-section-head rec-acc-head' }, acc ? swatch(acc) : null, acc?.name ?? 'Unknown account', h('span', { class: 'rec-acc-count' }, ` (${rows.length})`)),
+          h('ul', { class: 'rec-list rec-active' }, rows.map(row)),
+        ];
+      });
+  };
+  const groupSwitch = h('div', { class: 'seg rec-group-seg', role: 'radiogroup', 'aria-label': 'Arrange recurring items' },
+    [['account', 'By account'], ['date', 'All by date']].map(([v, label]) =>
+      h('button', {
+        type: 'button', role: 'radio', class: 'seg-btn', 'aria-checked': String(state.recGroup === v),
+        onclick: () => { state.recGroup = v; writePref('recGroup', v); renderRecurringManager(); },
+      }, label)));
+
   const list = all.length
     ? h('div', {},
-        active.length ? h('ul', { class: 'rec-list rec-active' }, active.map(row)) : h('p', { class: 'muted small' }, 'Nothing still running.'),
+        active.length > 1 ? groupSwitch : null,
+        ...activeLists(),
         expired.length ? h('h3', { class: 'rec-section-head' }, `Expired (${expired.length})`) : null,
         expired.length ? h('ul', { class: 'rec-list rec-expired' }, expired.map(row)) : null)
     : h('p', { class: 'muted' }, 'None yet. Add salary, direct debits, subscriptions and card payments here — they then appear ahead of time in your accounts, ready to confirm.');
@@ -2222,9 +2254,16 @@ function openRecurringEditor(itemId) {
       h('label', { class: 'field' }, h('span', {}, 'Last payment (£)'), finalAmt),
       h('label', { class: 'field' }, h('span', {}, 'First payment no.'), firstNo)),
     h('div', { class: 'muted small end-hint' }, 'Leave the last payment blank if it’s the same. Entries show “(x of y)” — if you’ve already paid some before this series starts, set its first payment number, e.g. 2 if payment 1 is done.'));
+  // v0.14.4: the three choices are worded for what the item is (it used to read "Leave it on that day" for
+  // money coming in too). Only the wording changes — the stored values (none / before / after) are the same.
+  const shiftWords = {
+    out: { none: 'Take it on that day anyway', before: 'Take it on the working day before', after: 'Take it on the next working day (e.g. direct debit)' },
+    in: { none: 'Expect it on that day anyway', before: 'Expect it on the working day before (e.g. salary)', after: 'Expect it on the next working day' },
+    transfer: { none: 'Move it on that day anyway', before: 'Move it on the working day before', after: 'Move it on the next working day' },
+  };
   const shift = h('select', {},
-    [['none', 'Leave it on that day'], ['before', 'Move to the working day before (e.g. salary)'], ['after', 'Move to the next working day (e.g. direct debit)']].map(([v, l]) =>
-      h('option', { value: v, selected: (existing?.shift ?? 'none') === v }, l)));
+    ['none', 'before', 'after'].map((v) =>
+      h('option', { value: v, selected: (existing?.shift ?? 'none') === v }, shiftWords[kind][v])));
   const startHint = h('div', { class: 'muted small' });
   const preview = h('div', { class: 'rec-preview' });
   const freqDayPair = h('div', { class: 'field-pair' },
@@ -2263,6 +2302,7 @@ function openRecurringEditor(itemId) {
     for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === kind));
     toField.hidden = kind !== 'transfer';
     accountLabel.textContent = kind === 'transfer' ? 'From' : 'Account';
+    for (const o of shift.options) o.textContent = shiftWords[kind][o.value]; // v0.14.4: wording follows out / in / transfer
     // statement payment: only for a transfer to a credit card
     const card = statementCardSelected();
     const cardCfg = statementConfig(card);

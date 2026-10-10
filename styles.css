@@ -558,3 +558,9 @@ li.env-hist-row { cursor: default; }
 .banner-open { grid-column: 2; grid-row: 1 / span 4; align-self: center; font-size: 30px; line-height: 1; opacity: 0.75; padding-left: 8px; }
 .tab-summary .summary-icon { display: inline-flex; color: var(--muted); }
 .tab-summary.tab-active .summary-icon { color: var(--text); }
+
+/* v0.14.4: recurring items grouped by account */
+.rec-group-seg { margin: 0 0 4px; }
+.rec-acc-head { display: flex; align-items: center; gap: 8px; margin: 14px 0 6px; }
+.rec-acc-head:first-of-type { margin-top: 8px; }
+.rec-acc-count { font-weight: 500; text-transform: none; letter-spacing: 0; }

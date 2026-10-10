@@ -487,3 +487,5 @@ npm test
 
 316 tests (incl. limits and loan accounts, older versions keeping newer fields (compat), joint account split/sync, page/code consistency checks, ticket purchases, envelopes, two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
 Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py`, `tickets_v013.py`, `stale_page_v0132.py`, `joint_v014.py`, `limits_v014.py`, `summary_v014.py`, `grid_header_v014.py` (and the others in `dev/e2e/`).
+
+**New in v0.14.4** — Recurring items page: items are grouped by account (soonest payment first in each group), with an "All by date" switch (remembered on each device). The weekend/bank-holiday choices now read "Take it…" for money out, "Expect it…" for money in and "Move it…" for a transfer.
