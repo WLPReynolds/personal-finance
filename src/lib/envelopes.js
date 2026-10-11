@@ -92,6 +92,10 @@ export function envelopesInUse(ledger, accountId) {
     for (const s of t.envelopeSplits) if (s.envelopeId) used.add(s.envelopeId);
   }
   for (const r of ledger.scheduledItems ?? []) {
+    if (r.recordType === 'recurring' && r.kind === 'move' && r.accountId === accountId) { // v0.14.5
+      for (const id of [r.fromEnvelopeId, r.toEnvelopeId]) if (id) used.add(id);
+      continue;
+    }
     if (r.recordType !== 'recurring' || !Array.isArray(r.envelopeSplits)) continue;
     if (r.accountId !== accountId && r.toAccountId !== accountId) continue;
     for (const s of r.envelopeSplits) if (s.envelopeId) used.add(s.envelopeId);

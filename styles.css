@@ -103,7 +103,7 @@ button, input, select { font: inherit; color: inherit; }
 .field { display: grid; gap: 4px; }
 .field > span:first-child { font-size: 13px; color: var(--muted); font-weight: 500; }
 .field-row { grid-template-columns: 1fr 130px; align-items: center; }
-.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.field-pair, .env-move-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 input[type="text"], input[type="date"], input[type="number"], input[type="password"], select {
   width: 100%; min-height: 44px; padding: 8px 10px; border-radius: 10px;
   border: 1px solid var(--line-strong); background: var(--surface);

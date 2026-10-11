@@ -58,7 +58,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.4';
+export const APP_VERSION = '0.14.5';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -1598,6 +1598,10 @@ function itemAmountText(item) {
 }
 function itemAccountsText(item) {
   const name = (id) => accountById(id)?.name ?? 'missing account';
+  if (item.kind === 'move') { // v0.14.5: an envelope move inside one account
+    const acc = accountById(item.accountId);
+    return `${name(item.accountId)} · ${envelopeName(acc, item.fromEnvelopeId ?? null)} → ${envelopeName(acc, item.toEnvelopeId ?? null)}`;
+  }
   const text = item.kind === 'transfer' ? `${name(item.accountId)} → ${name(item.toAccountId)}` : name(item.accountId);
   const envAcc = item.envelopeSplits ? accountById(envelopeLegAccountId(item, state.ledger.accounts)) : null;
   return envAcc ? `${text} · ${splitsNames(item.envelopeSplits, envAcc)}` : text;
@@ -1682,6 +1686,9 @@ function openOccurrenceDialog(itemId, period) {
     : p.amountSource === 'fallback'
       ? h('p', { class: 'stmt-info' }, `The ticket tracker has no figure for ${periodLabel(period)}, so this is the item’s own amount. ${trackerStatusText()}`)
       : null;
+  const moveLine = item.kind === 'move'
+    ? h('p', { class: 'stmt-info' }, `Moves money from ${envelopeName(account, item.fromEnvelopeId ?? null)} to ${envelopeName(account, item.toEnvelopeId ?? null)} inside ${account?.name ?? 'the account'}. The account’s balance doesn’t change.`)
+    : null;
   const status = p.skipped
     ? `Skipped for ${periodLabel(period)}.`
     : p.date < today ? `Due ${longDate(p.date)} — not confirmed yet.`
@@ -1701,6 +1708,7 @@ function openOccurrenceDialog(itemId, period) {
           p.changed ? h('span', { class: 'muted' }, ` Changed for this month (series: ${longDate(p.seriesDate)}, ${formatPence(p.seriesAmount)}).`) : null),
         stmtLine,
         trackerLine,
+        moveLine,
         h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount),
         h('div', { class: 'field-pair' },
           h('label', { class: 'field' }, h('span', {}, 'Date'), date),
@@ -2186,10 +2194,47 @@ function openRecurringEditor(itemId) {
   let kind = existing?.kind ?? 'out';
   const desc = h('input', { type: 'text', autocomplete: 'off', placeholder: 'e.g. Netflix', value: existing?.description ?? '' });
   const seg = h('div', { class: 'seg', role: 'radiogroup' },
-    [['out', 'Money out'], ['in', 'Money in'], ['transfer', 'Transfer / card payment']].map(([v, label]) =>
-      h('button', { type: 'button', role: 'radio', class: 'seg-btn', dataset: { value: v }, onclick: () => { kind = v; sync(); } }, label)));
+    [['out', 'Money out'], ['in', 'Money in'], ['transfer', 'Transfer / card payment'], ['move', 'Move between envelopes']].map(([v, label]) =>
+      h('button', {
+        type: 'button', role: 'radio', class: 'seg-btn', dataset: { value: v },
+        onclick: () => {
+          if (v === 'move' && !envAccounts().length) return toast('No account uses envelopes yet — turn them on in the account’s settings (Account…)', 'error');
+          kind = v; sync();
+        },
+      }, label)));
   const accountOptions = (selected, list = accounts) => list.map((a) => h('option', { value: a.id, selected: a.id === selected }, a.name));
   const account = h('select', {}, accountOptions(defaultAccount));
+  // v0.14.5: "Move between envelopes" — only accounts that use envelopes, and that account's envelopes (+ Unallocated)
+  const envAccounts = () => accounts.filter((a) => envelopeConfig(a));
+  const envChoices = (accId) => {
+    const a = accountById(accId);
+    return envelopeConfig(a)
+      ? [...envelopeList(a, { includeHidden: true }).map((e) => ({ id: e.id, name: e.hidden ? `${e.name} (hidden)` : e.name })), { id: '', name: 'Unallocated' }]
+      : [];
+  };
+  const fromEnv = h('select', { class: 'env-move-from' });
+  const toEnv = h('select', { class: 'env-move-to' });
+  let moveListed = false; // whether `account` currently lists only envelope accounts
+  function fillEnv() {
+    const list = envChoices(account.value);
+    const ids = new Set(list.map((c) => c.id));
+    const pick = (cur, dflt) => (cur !== undefined && ids.has(cur) ? cur : dflt);
+    const f = pick(fromEnv.value || undefined, existing && existing.accountId === account.value ? existing.fromEnvelopeId ?? '' : list[0]?.id);
+    const t = pick(toEnv.value || undefined, existing && existing.accountId === account.value ? existing.toEnvelopeId ?? '' : list[1]?.id);
+    const opts = (sel) => list.map((c) => h('option', { value: c.id, selected: c.id === sel }, c.name));
+    fromEnv.replaceChildren(...opts(f));
+    toEnv.replaceChildren(...opts(t));
+  }
+  function listAccounts() {
+    const wantMove = kind === 'move';
+    if (wantMove === moveListed) return;
+    moveListed = wantMove;
+    const keep = account.value;
+    const list = wantMove ? envAccounts() : accounts;
+    const sel = list.some((a) => a.id === keep) ? keep : list[0]?.id;
+    account.replaceChildren(...accountOptions(sel, list));
+    fillEnv();
+  }
   // v0.14: a transfer stays within one file (your accounts, or the joint account)
   const toChoices = (fromId) => { const ok = new Set(sameFileAccounts(fromId).map((a) => a.id)); return accounts.filter((a) => ok.has(a.id)); };
   const defaultTo = (fromId) => { const list = toChoices(fromId); return list.find((a) => a.id !== fromId && a.type === 'credit')?.id ?? list.find((a) => a.id !== fromId)?.id; };
@@ -2197,8 +2242,14 @@ function openRecurringEditor(itemId) {
   account.addEventListener('change', () => {
     const keep = toChoices(account.value).some((a) => a.id === toAccount.value) ? toAccount.value : defaultTo(account.value);
     toAccount.replaceChildren(...accountOptions(keep, toChoices(account.value)));
+    if (kind === 'move') fillEnv();
   });
   const accountLabel = h('span', {}, 'Account');
+  const moveField = h('div', {},
+    h('div', { class: 'env-move-pair' }, // not .field-pair: older tests (and anything else) count those by position
+      h('label', { class: 'field' }, h('span', {}, 'From envelope'), fromEnv),
+      h('label', { class: 'field' }, h('span', {}, 'To envelope'), toEnv)),
+    h('p', { class: 'muted small' }, 'Moves money from one envelope to another inside this account each time. The account’s balance doesn’t change. Each one shows ahead of time and you confirm it, like any recurring item.'));
   const toField = h('label', { class: 'field' }, h('span', {}, 'To (e.g. the credit card)'), toAccount);
   const amount = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input', placeholder: '0.00', value: existing ? penceToInput(existing.amount) : '' });
   const amountLabel = h('span', {}, 'Amount (£)');
@@ -2220,6 +2271,7 @@ function openRecurringEditor(itemId) {
   const envPicker = envelopePicker({ getAmount: () => (amount.value.trim() === '' ? null : parseAmount(amount.value)) });
   let envSingleOnly = null;
   function syncEnvelope() {
+    if (kind === 'move') { envPicker.el.hidden = true; return; }
     const legId = envelopeLegAccountId({ kind, accountId: account.value, toAccountId: kind === 'transfer' ? toAccount.value : null }, state.ledger.accounts);
     const envAcc = accountById(legId);
     envPicker.el.hidden = !envAcc;
@@ -2260,6 +2312,7 @@ function openRecurringEditor(itemId) {
     out: { none: 'Take it on that day anyway', before: 'Take it on the working day before', after: 'Take it on the next working day (e.g. direct debit)' },
     in: { none: 'Expect it on that day anyway', before: 'Expect it on the working day before (e.g. salary)', after: 'Expect it on the next working day' },
     transfer: { none: 'Move it on that day anyway', before: 'Move it on the working day before', after: 'Move it on the next working day' },
+    move: { none: 'Move it on that day anyway', before: 'Move it on the working day before (e.g. payday)', after: 'Move it on the next working day' },
   };
   const shift = h('select', {},
     ['none', 'before', 'after'].map((v) =>
@@ -2279,6 +2332,7 @@ function openRecurringEditor(itemId) {
         day: Number.parseInt(day.value, 10) || existing?.day || 1,
         startDate: start.value, endDate: end.value || null, shift: 'after', finalAmount: null,
         firstNumber: existing?.firstNumber ?? 1, payStatement: true, amountFrom: null,
+        fromEnvelopeId: null, toEnvelopeId: null,
         envelopeSplits: envPicker.el.hidden ? null : envPicker.value().splits ?? null,
       };
     }
@@ -2288,7 +2342,9 @@ function openRecurringEditor(itemId) {
     const everyDays = byDays ? (/^\s*\d+\s*$/.test(nDays.value) ? Number(nDays.value) : NaN) : null;
     return {
       payStatement: false,
-      amountFrom: fromTracker.checked ? TRACKER_SOURCE : null,
+      amountFrom: fromTracker.checked && kind !== 'move' ? TRACKER_SOURCE : null,
+      fromEnvelopeId: kind === 'move' ? fromEnv.value || null : null,
+      toEnvelopeId: kind === 'move' ? toEnv.value || null : null,
       description: desc.value, kind, accountId: account.value, toAccountId: kind === 'transfer' ? toAccount.value : null,
       amount: parseAmount(amount.value), everyMonths, everyDays,
       day: byDays ? Number(start.value.slice(8, 10)) || 1 : Number.parseInt(day.value, 10),
@@ -2299,8 +2355,10 @@ function openRecurringEditor(itemId) {
     };
   }
   function sync() {
+    listAccounts();
     for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === kind));
     toField.hidden = kind !== 'transfer';
+    moveField.hidden = kind !== 'move';
     accountLabel.textContent = kind === 'transfer' ? 'From' : 'Account';
     for (const o of shift.options) o.textContent = shiftWords[kind][o.value]; // v0.14.4: wording follows out / in / transfer
     // statement payment: only for a transfer to a credit card
@@ -2316,8 +2374,8 @@ function openRecurringEditor(itemId) {
       : card?.type === 'credit' ? `Set ${card.name}’s statement date first (its Account… button).` : '';
     const stmtOn = payingStatement();
     for (const el of [freqDayPair, shiftField]) el.hidden = stmtOn;
-    const trackerOn = !stmtOn && fromTracker.checked;
-    trackerField.hidden = stmtOn;
+    const trackerOn = !stmtOn && fromTracker.checked && kind !== 'move';
+    trackerField.hidden = stmtOn || kind === 'move';
     trackerHint.textContent = trackerOn
       ? `Each month uses the tracker’s figure for the pay period starting that month; the amount below is used for any month it has no figure for. ${trackerStatusText()}`
       : 'For Train fare/Parking: the figure the ticket tracker works out for each pay period.';
@@ -2398,6 +2456,7 @@ function openRecurringEditor(itemId) {
   h('label', { class: 'field' }, h('span', {}, 'Description'), desc),
   seg,
   h('div', { class: 'field-pair' }, h('label', { class: 'field' }, accountLabel, account), toField),
+  moveField,
   payStmtField,
   trackerField,
   h('label', { class: 'field' }, amountLabel, amount, amountHint),

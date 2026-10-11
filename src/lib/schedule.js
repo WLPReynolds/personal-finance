@@ -41,7 +41,8 @@ export const MAX_EVERY_DAYS = 366;
  * @property {string} id
  * @property {'recurring'} recordType
  * @property {string} description
- * @property {'out'|'in'|'transfer'} kind
+ * @property {'out'|'in'|'transfer'|'move'} kind  - 'move' (v0.14.5): shift money between two envelopes of ONE account; the
+ *                                         account balance never changes. Entered as an envelope-move note (envelopes.js isEnvelopeMove).
  * @property {string} accountId          - the account; for a transfer, the one the money leaves
  * @property {string|null} toAccountId   - transfer only: where the money goes (e.g. the credit card)
  * @property {number} amount             - pence
@@ -67,6 +68,8 @@ export const MAX_EVERY_DAYS = 366;
  *                                         account (envelopeLegAccountId). One envelope follows whatever the month's amount
  *                                         is; a split must add up to `amount`, and a month with a different amount is
  *                                         left Unallocated. Absent/null = Unallocated.
+ * @property {string|null} [fromEnvelopeId] - v0.14.5, kind 'move' only: envelope the money leaves (null = Unallocated)
+ * @property {string|null} [toEnvelopeId]   - v0.14.5, kind 'move' only: envelope it goes into (null = Unallocated)
  * @property {string} createdAt
  */
 
@@ -327,6 +330,7 @@ export function projections(ledger, toIso, holidays, sources = {}) {
       kind: item.kind,
       accountId: item.accountId,
       toAccountId: item.kind === 'transfer' ? item.toAccountId : null,
+      ...(item.kind === 'move' ? { fromEnvelopeId: item.fromEnvelopeId ?? null, toEnvelopeId: item.toEnvelopeId ?? null } : {}),
       skipped: Boolean(ex?.skipped),
       changed: Boolean(ex && (ex.date !== null || ex.amount !== null || ex.description !== null)),
       ...extra,
@@ -392,6 +396,17 @@ export function projections(ledger, toIso, holidays, sources = {}) {
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/**
+ * v0.14.5: the shape of an envelope move (same as ops.js addEnvelopeMove): a note of £0 carrying two signed
+ * envelope splits, so no account balance code changes. `skipped` etc. are added by the caller.
+ */
+function moveLeg(amount, fromId, toId) {
+  return {
+    kind: 'note', amount: 0, direction: 'credit',
+    envelopeSplits: [{ envelopeId: fromId ?? null, amount: -amount }, { envelopeId: toId ?? null, amount }],
+  };
+}
+
 /** One projection as transaction-shaped legs (two for a transfer), marked isProjected. */
 function projectionLegs(p) {
   if (p.kind === 'ticket') return ticketLegs(p);
@@ -411,6 +426,7 @@ function projectionLegs(p) {
     description: p.description,
   };
   const id = `proj:${p.itemId}:${p.period}`;
+  if (p.kind === 'move') return [{ ...base, id, accountId: p.accountId, ...moveLeg(p.amount, p.fromEnvelopeId, p.toEnvelopeId), transferId: null }];
   if (p.kind === 'transfer') {
     return [
       { ...base, id: `${id}:out`, accountId: p.accountId, direction: 'debit', transferId: id },
@@ -476,8 +492,15 @@ function validateItem(f, ledger) {
     if (!statementConfig(card)) throw new Error('Set the card’s statement date first (Account…)');
     if (!Number.isInteger(f.amount) || f.amount < 0) throw new Error('Estimate must be £0.00 or more');
   }
-  if (!['out', 'in', 'transfer'].includes(f.kind)) throw new Error('Choose money out, money in or transfer');
+  if (!['out', 'in', 'transfer', 'move'].includes(f.kind)) throw new Error('Choose money out, money in, transfer or move between envelopes');
   if (!ledger.accounts.some((a) => a.id === f.accountId)) throw new Error('Choose an account');
+  if (f.kind === 'move') { // v0.14.5
+    const acc = ledger.accounts.find((a) => a.id === f.accountId);
+    if (!envelopeConfig(acc)) throw new Error('This account doesn’t use envelopes');
+    const known = new Set(acc.envelopes.list.map((e) => e.id));
+    for (const id of [f.fromEnvelopeId, f.toEnvelopeId]) if (id != null && !known.has(id)) throw new Error('Pick an envelope');
+    if ((f.fromEnvelopeId ?? null) === (f.toEnvelopeId ?? null)) throw new Error('Pick two different envelopes');
+  }
   if (f.kind === 'transfer' && ledger.accounts.find((a) => a.id === f.accountId)?.type === 'loan') {
     throw new LoanTransferError(ledger.accounts.find((a) => a.id === f.accountId).name); // v0.14
   }
@@ -515,6 +538,7 @@ function validateItem(f, ledger) {
 
 function cleanItemFields(f) {
   const payStatement = Boolean(f.kind === 'transfer' && f.payStatement);
+  const isMove = f.kind === 'move';
   const everyDays = payStatement || f.everyDays == null || f.everyDays === '' ? null : f.everyDays;
   // every N days: keep an approximate months/day rule alongside, for devices older than v0.7.1
   const byDays = everyDays !== null && Number.isInteger(everyDays) && isIso(f.startDate);
@@ -533,8 +557,10 @@ function cleanItemFields(f) {
     finalAmount: f.payStatement ? null : f.finalAmount ?? null,
     firstNumber: f.firstNumber ?? 1,
     payStatement,
-    amountFrom: !payStatement && f.amountFrom === TRACKER_SOURCE ? TRACKER_SOURCE : null,
-    envelopeSplits: !Array.isArray(f.envelopeSplits) || !f.envelopeSplits.length ? null
+    amountFrom: !payStatement && !isMove && f.amountFrom === TRACKER_SOURCE ? TRACKER_SOURCE : null,
+    fromEnvelopeId: isMove ? f.fromEnvelopeId || null : null,
+    toEnvelopeId: isMove ? f.toEnvelopeId || null : null,
+    envelopeSplits: isMove || !Array.isArray(f.envelopeSplits) || !f.envelopeSplits.length ? null
       : f.envelopeSplits.length === 1 ? [{ envelopeId: f.envelopeSplits[0].envelopeId, amount: f.amount }]
         : f.envelopeSplits.map((x) => ({ envelopeId: x.envelopeId, amount: x.amount })),
   };
@@ -603,6 +629,12 @@ export function confirmOccurrence(ledger, itemId, period, { date, amount, descri
     date, amount, description: text, kind: 'transaction', envelopeSplits: null,
     scheduledItemId: itemId, scheduledPeriod: period, isProjected: false,
   };
+  if (item.kind === 'move') { // v0.14.5: an envelope move note; the account balance doesn't change
+    const acc = ledger.accounts.find((a) => a.id === item.accountId);
+    if (!envelopeConfig(acc)) throw new Error('This account doesn’t use envelopes');
+    const tx = { ...common, id, accountId: item.accountId, category: null, transferId: null, ...moveLeg(amount, item.fromEnvelopeId, item.toEnvelopeId) };
+    return touch({ ...ledger, transactions: [...ledger.transactions, tx] });
+  }
   if (item.kind === 'transfer') {
     const legs = [
       { ...common, id: `${id}:out`, accountId: item.accountId, direction: 'debit', category: 'Transfer', transferId: id },
