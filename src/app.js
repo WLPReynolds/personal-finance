@@ -58,7 +58,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.5';
+export const APP_VERSION = '0.14.6';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -1860,12 +1860,15 @@ function openReturnDialog(month) {
       h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: close }, '✕')),
     h('p', { class: 'muted small rec-summary' }, `${safe.name} → ${back.name} · the day before the ${card.name} payment on ${dayLabel(p.dueDate)}`),
     h('p', { class: `rec-status ${p.date <= todayIso() ? 'rec-due' : ''}` }, `For the ${longDate(stDate)} statement — everything ring-fenced on it:`),
-    h('ul', { class: 'ticket-spends' }, p.spends.map((t) => h('li', {},
-      h('span', {}, `${shortDate(t.date)} · ${t.description}${t.isProjected ? ' (projected)' : ''}`),
-      h('span', {}, formatPence(t.amount))))),
+    h('ul', { class: 'ticket-spends' },
+      p.broughtForward ? h('li', {}, h('span', {}, 'Ring-fenced by hand before you started'), h('span', {}, formatPence(p.broughtForward))) : null,
+      p.spends.map((t) => h('li', {},
+        h('span', {}, `${shortDate(t.date)} · ${t.description}${t.isProjected ? ' (projected)' : ''}`),
+        h('span', {}, formatPence(t.amount)))),
+      p.alreadyBack ? h('li', {}, h('span', {}, 'Already moved back (confirmed)'), h('span', {}, `−${formatPence(p.alreadyBack)}`)) : null),
     h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount),
     h('label', { class: 'field' }, h('span', {}, 'Date'), date),
-    h('p', { class: 'muted small' }, 'Confirm once you’ve moved it — change the amount first if you moved a different figure (e.g. something ring-fenced by hand before you switched this on).'),
+    h('p', { class: 'muted small' }, 'Confirm once you’ve moved it — change the amount first if you moved a different figure. Anything ring-fenced on this statement after you confirm comes back as a top-up. Something ring-fenced by hand before you switched this on: ⚙ → Ticket purchases → Already ring-fenced.'),
     h('div', { class: 'sheet-actions' }, h('span'), confirmBtn)));
   openDialog(dlg);
 }
@@ -3083,19 +3086,40 @@ function ticketSection() {
   const safe = select(plain, rec?.safeAccountId ?? pick(plain, /safe/i));
   const back = select(plain, rec?.returnAccountId ?? (plain.find((a) => a.type === 'current')?.id ?? plain[0].id));
   const start = h('input', { type: 'date', value: rec?.startDate ?? todayIso() });
+  // v0.14.6: money ring-fenced by hand before the start date (its spend is inside the card's brought-forward balance)
+  const bfAmount = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: '0.00', value: rec?.broughtForward ? penceToInput(rec.broughtForward.amount) : '' });
+  const bfMonth = h('select', {});
+  const fillBfMonths = () => {
+    const c = accountById(card.value);
+    const keep = bfMonth.value || rec?.broughtForward?.month;
+    if (!c || !statementConfig(c) || !start.value) return bfMonth.replaceChildren();
+    const m = statementMonthByDate(c, start.value, state.holidays);
+    bfMonth.replaceChildren(...[addMonths(m, -1), m].map((x) => h('option', { value: x, selected: x === (keep ?? m) },
+      `${longDate(statementDate(c, x, state.holidays))} statement`)));
+    if (![...bfMonth.options].some((o) => o.selected)) bfMonth.value = m;
+  };
+  fillBfMonths();
+  card.addEventListener('change', fillBfMonths);
+  start.addEventListener('change', fillBfMonths);
   const fields = h('div', { hidden: !on.checked },
     h('label', { class: 'field' }, h('span', {}, 'Card the tickets go on'), card),
     h('label', { class: 'field' }, h('span', {}, 'Ring-fenced from (envelope)'), env),
     h('label', { class: 'field' }, h('span', {}, 'Ring-fence account'), safe),
     h('label', { class: 'field' }, h('span', {}, 'Money goes back to'), back),
     h('label', { class: 'field' }, h('span', {}, 'Start from'), start,
-      h('div', { class: 'muted small' }, 'Tickets bought before this day are left out — enter those by hand. It’s the day you switch this on unless you change it.')));
+      h('div', { class: 'muted small' }, 'Tickets bought before this day are left out — enter those by hand. It’s the day you switch this on unless you change it.')),
+    h('label', { class: 'field' }, h('span', {}, 'Already ring-fenced before that (£)'), bfAmount,
+      h('div', { class: 'muted small' }, 'Money you’d already moved to the ring-fence account by hand, for spends from before your records start (in the card’s brought-forward balance). It’s added to the money back for the statement below. Leave blank if none.')),
+    h('label', { class: 'field' }, h('span', {}, 'On the statement'), bfMonth));
   on.addEventListener('change', () => { fields.hidden = !on.checked; if (on.checked && !rec?.startDate) start.value = todayIso(); });
   const problem = rec?.enabled ? ticketSettingsProblem(l, rec) : null;
   const save = () => {
     const [envelopeAccountId, envelopeId] = env.value.split('|');
+    const bfPence = bfAmount.value.trim() ? parseAmount(bfAmount.value) : 0;
+    if (bfPence === null) return toast('Enter the amount already ring-fenced like 12.34', 'error');
     const next = attempt(() => setTicketSettings(state.ledger, {
       enabled: on.checked, cardAccountId: card.value, envelopeAccountId, envelopeId, safeAccountId: safe.value, returnAccountId: back.value, startDate: start.value,
+      broughtForward: bfPence ? { month: bfMonth.value, amount: bfPence } : null,
     }));
     if (!next) return;
     const turnedOn = on.checked && !rec?.enabled;

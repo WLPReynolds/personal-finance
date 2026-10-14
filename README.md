@@ -4,7 +4,25 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.14.3 — fix: recurring items list showed £0.00 (v0.14.2: clearer limit warnings ; v0.14.1: envelopes on loans; v0.14.0: joint account file, limits, phone Summary)
+## Status: v0.14.6 — fixes: ring-fenced money back went stale once confirmed; grid put a transfer out ahead of the day's money in (v0.14.3: recurring items list showed £0.00; v0.14.0: joint account file, limits, phone Summary)
+
+**v0.14.6:**
+- **Ring-fenced money back stays up to date after you confirm it.** It used to
+  stop counting a statement once its money back was confirmed, so anything
+  ring-fenced on that statement afterwards never came back (the card payment
+  still included it → a false overdraft). Now the projection is everything
+  ring-fenced on the statement **less what's already been moved back**; any
+  difference shows as a 🔒 top-up row (ids `tkret:<month>:2`, `:3`… — still
+  deterministic, so two devices merge to one).
+- **⚙ → Ticket purchases → Already ring-fenced before that (£)** + **On the
+  statement**: money ring-fenced by hand before the start date, for spends inside
+  the card's brought-forward balance (e.g. a ticket bought before your records
+  start). Added to that statement's money back; listed in its dialog.
+- **Grid: credits before debits in every column.** A transfer row counted as a
+  credit for every account, so a transfer *out* of the current account could
+  sort ahead of that day's salary and show a false overdraft (the list view was
+  right). Now within a day: money in, then transfers (money arriving before it's
+  passed on), then money out.
 
 **v0.14.3:** the recurring items list (⚙ → Manage recurring items) showed every
 amount as £0.00. Display only: the stored amounts were always right. It had

@@ -320,12 +320,84 @@ await test('confirming the money back replaces that month’s projection; balanc
   l = confirmReturn(l, s, '2026-10', { date: '2026-11-12', amount: PRICE, description: 'Back for Barclaycard' });
   assert.ok(!returnProj(l, '2026-10-06').some((p) => p.statementMonth === '2026-10'));
   assert.ok(l.transactions.every((t) => t.id !== 'tkret:2026-10:out' || t.ticketReturn === '2026-10'));
-  assert.throws(() => confirmReturn(l, s, '2026-10', { date: '2026-11-12', amount: PRICE }), /Already/);
   l = addRecurring(l, { description: 'Barclaycard', kind: 'transfer', accountId: current.id, toAccountId: card.id, amount: 0, payStatement: true, everyMonths: 1, day: 1, startDate: '2026-10-01', endDate: null, shift: 'after' }).ledger;
   const view = withProjections(l, '2026-11-13', HOL, src('2026-10-06', TICKETS.slice(0, 2)));
   assert.equal(balanceAsOf(view, current, '2026-11-13'), 200000, 'back in, then out to Barclaycard');
   assert.equal(balanceAsOf(view, safe, '2026-11-13'), 0);
   assert.equal(balanceAsOf(view, card, '2026-11-13') + 0, 0);
+});
+
+console.log('v0.14.6 — money back stays up to date after confirming; brought-forward ring-fence');
+const fence = (l, date, amount) => {
+  const card = l.accounts.find((a) => a.id === ticketSettings(l).cardAccountId);
+  l = addTransaction(l, { accountId: card.id, date, amount, direction: 'debit', description: 'Parking' });
+  return addRingFence(l, ticketSettings(l), l.transactions.at(-1).id);
+};
+await test('a spend ring-fenced AFTER the money back was confirmed comes back as a top-up', () => {
+  const { ledger } = setup();
+  const s = ticketSettings(ledger);
+  let l = confirmTicket(ledger, s, estimatesOf().tickets[1], { date: '2026-10-06', amount: PRICE });
+  l = confirmReturn(l, s, '2026-10', { date: '2026-11-12', amount: PRICE, description: 'Back' });
+  assert.ok(!returnProj(l, '2026-10-14', '2026-11-30', TICKETS.slice(0, 2)).length, 'all back: nothing projected');
+  l = fence(l, '2026-10-14', 809);
+  const rs = returnProj(l, '2026-10-14', '2026-11-30', TICKETS.slice(0, 2));
+  assert.deepEqual(rs.map((p) => [p.statementMonth, p.date, p.amount, p.ringFenced, p.alreadyBack]), [['2026-10', '2026-11-12', 809, PRICE + 809, PRICE]]);
+  l = confirmReturn(l, s, '2026-10', { date: '2026-11-12', amount: 809, description: 'Back' });
+  assert.ok(l.transactions.some((t) => t.id === 'tkret:2026-10:2:out' && t.ticketReturn === '2026-10'));
+  assert.ok(l.transfers.some((t) => t.id === 'tkret:2026-10:2'));
+  assert.ok(!returnProj(l, '2026-10-14', '2026-11-30', TICKETS.slice(0, 2)).length);
+});
+await test('top-up ids are deterministic (two devices merge to one) and skip ids still in use', () => {
+  const { ledger } = setup();
+  const s = ticketSettings(ledger);
+  let l = confirmReturn(ledger, s, '2026-10', { date: '2026-11-12', amount: 100 });
+  l = confirmReturn(l, s, '2026-10', { date: '2026-11-12', amount: 200 });
+  const a = confirmReturn(l, s, '2026-10', { date: '2026-11-12', amount: 300 });
+  const b = confirmReturn(l, s, '2026-10', { date: '2026-11-12', amount: 300 });
+  assert.equal(a.transactions.at(-1).id, b.transactions.at(-1).id);
+  assert.equal(a.transactions.at(-1).transferId, 'tkret:2026-10:3');
+  // first one deleted: the next takes the free plain id, never a clash
+  const gone = deleteTransaction(l, 'tkret:2026-10:out');
+  const c = confirmReturn(gone, s, '2026-10', { date: '2026-11-12', amount: 300 });
+  assert.equal(c.transactions.at(-1).transferId, 'tkret:2026-10');
+  assert.equal(new Set(c.transactions.map((t) => t.id)).size, c.transactions.length);
+});
+await test('confirming more than was ring-fenced → no projection (never negative)', () => {
+  const { ledger } = setup();
+  const s = ticketSettings(ledger);
+  let l = fence(ledger, '2026-10-09', 639);
+  l = confirmReturn(l, s, '2026-10', { date: '2026-11-12', amount: 5000 });
+  assert.ok(!returnProj(l, '2026-10-06', '2026-11-30', []).length);
+});
+await test('brought forward: money ring-fenced before the start date is added to its statement', () => {
+  const { ledger, fields } = setup();
+  let l = setTicketSettings(ledger, { ...fields, broughtForward: { month: '2026-10', amount: PRICE } });
+  l = confirmTicket(l, ticketSettings(l), estimatesOf().tickets[1], { date: '2026-10-06', amount: PRICE });
+  l = fence(l, '2026-10-14', 809);
+  const [p] = returnProj(l, '2026-10-14', '2026-11-30', TICKETS.slice(0, 2));
+  assert.deepEqual([p.statementMonth, p.amount, p.broughtForward], ['2026-10', 2 * PRICE + 809, PRICE]);
+  // Wayne's case (14 Oct 2026): £307.20 confirmed for the two tickets, then parking ring-fenced → only the parking is projected
+  l = confirmReturn(l, ticketSettings(l), '2026-10', { date: '2026-11-12', amount: 2 * PRICE });
+  assert.deepEqual(returnProj(l, '2026-10-14', '2026-11-30', TICKETS.slice(0, 2)).map((x) => x.amount), [809]);
+});
+await test('brought forward on a statement with nothing else ring-fenced still comes back', () => {
+  const { ledger, fields } = setup();
+  const l = setTicketSettings(ledger, { ...fields, broughtForward: { month: '2026-09', amount: 1000 } });
+  const rs = returnProj(l, '2026-10-06', '2026-11-30', []);
+  assert.deepEqual(rs.map((p) => [p.statementMonth, p.amount, p.spends.length]), [['2026-09', 1000, 0]]);
+});
+await test('brought forward: kept when the field isn’t given, cleared by null / £0, bad values refused', () => {
+  const { ledger, fields } = setup();
+  let l = setTicketSettings(ledger, { ...fields, broughtForward: { month: '2026-10', amount: 500 } });
+  l = setTicketSettings(l, { ...fields });
+  assert.deepEqual(ticketSettings(l).broughtForward, { month: '2026-10', amount: 500 });
+  assert.equal(ticketSettings(setTicketSettings(l, { ...fields, broughtForward: null })).broughtForward, null);
+  assert.equal(ticketSettings(setTicketSettings(l, { ...fields, broughtForward: { month: '2026-10', amount: 0 } })).broughtForward, null);
+  assert.throws(() => setTicketSettings(l, { ...fields, broughtForward: { month: '2026-10', amount: 1.5 } }), /12\.34/);
+  assert.throws(() => setTicketSettings(l, { ...fields, broughtForward: { month: 'Oct', amount: 100 } }), /statement/);
+  // an older record (no field) reads as none
+  const old = setup().ledger;
+  assert.equal(ticketSettings(old).broughtForward ?? null, null);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

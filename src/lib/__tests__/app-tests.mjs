@@ -161,6 +161,23 @@ test('grid balances agree with per-account balances', () => {
   for (const a of accounts) assert.equal(last.balances[a.id], bal[a.id], a.name);
   assert.equal(bal[nationwide.id], 598);
 });
+test('grid: a transfer OUT of an account comes after that day’s money in (credit before debit in every column)', () => {
+  let { ledger, current, nationwide, barclaycard } = setup();
+  // entered first, so insertion order alone would put it ahead of the salary
+  ledger = addTransaction(ledger, { accountId: current.id, date: '2026-10-28', amount: 500000, direction: 'debit', description: 'To savings', counterpartAccountId: nationwide.id });
+  ledger = addTransaction(ledger, { accountId: current.id, date: '2026-10-28', amount: 1000, direction: 'debit', description: 'Lottery' });
+  ledger = addTransaction(ledger, { accountId: current.id, date: '2026-10-28', amount: 400000, direction: 'credit', description: 'Salary' });
+  const rows = buildGridRows(ledger, [current, nationwide, barclaycard]);
+  assert.deepEqual(rows.map((r) => r.description), ['Salary', 'To savings', 'Lottery']);
+  assert.deepEqual(rows.map((r) => r.balances[current.id]), [360000 + 400000, 260000, 259000]);
+});
+test('grid: transfers on one day — money arrives before it is passed on', () => {
+  let { ledger, current, nationwide, barclaycard } = setup();
+  ledger = addTransaction(ledger, { accountId: current.id, date: '2026-10-13', amount: 70000, direction: 'debit', description: 'Barclaycard DD', counterpartAccountId: barclaycard.id });
+  ledger = addTransaction(ledger, { accountId: nationwide.id, date: '2026-10-13', amount: 500, direction: 'debit', description: 'Top up', counterpartAccountId: current.id });
+  const rows = buildGridRows(ledger, [current, nationwide, barclaycard]);
+  assert.deepEqual(rows.map((r) => r.description), ['Top up', 'Barclaycard DD']);
+});
 test('descriptionHistory gives most recent use first, de-duplicated', () => {
   let { ledger, current } = setup();
   ledger = addTransaction(ledger, { accountId: current.id, date: '2026-10-02', amount: 1500, direction: 'debit', description: 'Lottery' });

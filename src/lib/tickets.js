@@ -92,6 +92,9 @@ export function setTicketSettings(ledger, fields) {
     safeAccountId: fields.safeAccountId ?? null,
     returnAccountId: fields.returnAccountId ?? null,
     startDate: fields.startDate ?? prev?.startDate ?? null,
+    // v0.14.6: money already ring-fenced by hand before the start date, for spends inside
+    // the card's brought-forward balance — { month: statement 'YYYY-MM', amount: pence } or null
+    broughtForward: 'broughtForward' in fields ? cleanBroughtForward(fields.broughtForward) : (prev?.broughtForward ?? null),
     createdAt: prev?.createdAt ?? new Date().toISOString(),
   };
   if (rec.enabled) {
@@ -112,6 +115,14 @@ export function setTicketSettings(ledger, fields) {
   }
   const others = (ledger.scheduledItems ?? []).filter((r) => r.recordType !== TICKET_RECORD_TYPE);
   return touch({ ...ledger, scheduledItems: [...others, rec] });
+}
+
+/** null for nothing (no amount / £0); throws on a bad amount or month. */
+function cleanBroughtForward(bf) {
+  if (!bf || !bf.amount) return null;
+  if (!Number.isInteger(bf.amount) || bf.amount < 0) throw new Error('The amount already ring-fenced must be like 12.34');
+  if (!/^\d{4}-\d{2}$/.test(bf.month ?? '')) throw new Error('Pick the statement the amount already ring-fenced is on');
+  return { month: bf.month, amount: bf.amount };
 }
 
 // ------------------------------------------------------------------ ring-fence
@@ -291,32 +302,54 @@ export function ringFencedByStatement(view, settings, holidays) {
   return by;
 }
 
-/** Statement months whose money has already been moved back (confirmed). */
+/** Statement months whose money has already been moved back (confirmed, at least in part). */
 export function confirmedReturnMonths(ledger) {
-  return new Set(ledger.transactions.filter((t) => t.ticketReturn).map((t) => t.ticketReturn));
+  return new Set(confirmedReturnAmounts(ledger).keys());
+}
+
+/** Map statement month -> pence already moved back (confirmed), summed over every confirmation. */
+export function confirmedReturnAmounts(ledger) {
+  const by = new Map();
+  for (const t of ledger.transactions) {
+    if (!t.ticketReturn || t.direction !== 'debit') continue; // one leg per confirmation
+    by.set(t.ticketReturn, (by.get(t.ticketReturn) ?? 0) + t.amount);
+  }
+  return by;
 }
 
 /**
  * One projected transfer per statement with anything ring-fenced on it:
  * safe account → return account, the CALENDAR day before the payment date
  * (weekends are fine). `view` must include projected tickets.
+ *
+ * v0.14.6: amount = everything ring-fenced on the statement (plus any amount
+ * ring-fenced by hand before the start date, from the settings) LESS what has
+ * already been confirmed as moved back for it. So a spend ring-fenced after
+ * the money back was confirmed still comes back (as a top-up), instead of
+ * being silently left out.
  */
 export function returnProjections(view, settings, holidays, toIso) {
   if (!settings) return [];
   const card = view.accounts.find((a) => a.id === settings.cardAccountId);
-  const done = confirmedReturnMonths(view);
+  const back = confirmedReturnAmounts(view);
+  const byMonth = ringFencedByStatement(view, settings, holidays);
+  const bf = settings.broughtForward;
+  if (bf?.amount > 0 && !byMonth.has(bf.month)) byMonth.set(bf.month, []);
   const out = [];
-  for (const [month, spends] of [...ringFencedByStatement(view, settings, holidays)].sort((a, b) => a[0].localeCompare(b[0]))) {
-    if (done.has(month)) continue;
+  for (const [month, spends] of [...byMonth].sort((a, b) => a[0].localeCompare(b[0]))) {
     const due = paymentDueDate(card, month, holidays);
     if (!due) continue;
     const date = addDays(due, -1);
     if (date > toIso) continue;
-    const amount = spends.reduce((s, t) => s + t.amount, 0);
+    const broughtForward = bf?.month === month ? bf.amount : 0;
+    const ringFenced = spends.reduce((s, t) => s + t.amount, 0) + broughtForward;
+    const alreadyBack = back.get(month) ?? 0;
+    const amount = ringFenced - alreadyBack;
     if (amount <= 0) continue;
     out.push({
       key: `ticketReturn:${month}`, kind: 'ticketReturn', itemId: null, period: null,
-      statementMonth: month, dueDate: due, spends, date, seriesDate: date, amount, seriesAmount: amount,
+      statementMonth: month, dueDate: due, spends, broughtForward, ringFenced, alreadyBack,
+      date, seriesDate: date, amount, seriesAmount: amount,
       description: `Ring-fenced money back for ${card.name}`,
       accountId: settings.safeAccountId, toAccountId: settings.returnAccountId,
       skipped: false, changed: false, number: null, settings,
@@ -338,14 +371,20 @@ export function returnLegs(p) {
   ];
 }
 
-/** Confirm the money moved back for one statement (ids from the month, so two devices merge to one). */
+/**
+ * Confirm money moved back for one statement. Ids come from the month, so two
+ * devices confirming the same thing merge to one: the first is `tkret:<month>`,
+ * a later top-up for the same statement (v0.14.6) `tkret:<month>:2`, `:3`…
+ * (the first number not in use).
+ */
 export function confirmReturn(ledger, settings, month, { date, amount, description }) {
   if (!settings) throw new Error('Ticket purchases aren’t set up (⚙)');
   if (!/^\d{4}-\d{2}$/.test(month ?? '')) throw new Error('Not a valid statement month');
   if (!isIso(date)) throw new Error('A valid date is required');
   if (!Number.isInteger(amount) || amount <= 0) throw new Error('Amount must be more than £0.00');
-  const id = returnTxId(month);
-  if (ledger.transactions.some((t) => t.ticketReturn === month)) throw new Error('Already confirmed');
+  const used = new Set(ledger.transactions.map((t) => t.transferId).filter(Boolean));
+  let id = returnTxId(month);
+  for (let n = 2; used.has(id); n++) id = `${returnTxId(month)}:${n}`;
   const text = (description ?? '').trim() || 'Ring-fenced money back';
   const common = {
     date, amount, description: text, category: 'Transfer', kind: 'transaction', envelopeSplits: null,
