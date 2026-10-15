@@ -185,6 +185,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: end;
+  box-shadow: none;
 }
 .banner-accent {
   position: absolute; top: 0; left: 0; right: 0; height: 5px;
@@ -736,7 +737,9 @@ li.env-hist-row { cursor: default; }
 .banner-summary:active { filter: brightness(0.95); }
 .banner-summary:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
 .banner-name { grid-column: 1; display: flex; align-items: center; gap: 2px; font-size: 16px; font-weight: 700; margin-bottom: 4px; }
-.banner-summary .banner-amount { font-size: 26px; }
+.banner-summary .banner-label { grid-column: 1; max-height: none; margin-bottom: 0; overflow: visible; transform: none; transition: none; }
+.banner-summary .banner-amount { grid-column: 1; font-size: 26px; transition: none; }
+.banner-summary .banner-eom { grid-column: 1; text-align: left; align-self: auto; transition: none; }
 .banner-open { grid-column: 2; grid-row: 1 / span 4; align-self: center; font-size: 30px; line-height: 1; opacity: 0.75; padding-left: 8px; }
 .tab-summary .summary-icon { display: inline-flex; color: var(--muted); }
 .tab-summary.tab-active .summary-icon { color: var(--text); }
