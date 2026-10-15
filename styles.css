@@ -160,10 +160,78 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   border: 1px solid var(--line-strong); background: var(--surface); border-radius: 999px; padding: 8px 14px; min-height: 40px; cursor: pointer; font-weight: 600; font-size: 14px;
 }
 .tab-active { border-color: var(--acc); box-shadow: inset 0 0 0 1px var(--acc); }
+.banner-wrap {
+  position: relative;
+}
+.banner-wrap.is-compact {
+  min-height: var(--full-height, auto);
+}
+.banner-wrap.is-compact .banner-sticky {
+  position: sticky;
+  top: calc(57px + 61px + env(safe-area-inset-top));
+  z-index: 9;
+  background: var(--bg);
+  padding: 2px 0 4px;
+}
 .banner {
   position: relative; margin: 0 12px 8px; padding: 14px 16px; border-radius: var(--radius); color: var(--ink, #fff); overflow: hidden;
   background: var(--acc);
   display: grid; grid-template-columns: 1fr auto; align-items: end;
+  transition: padding 0.22s ease, margin 0.22s ease, border-radius 0.22s ease, box-shadow 0.22s ease;
+}
+.banner.banner-compact {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0 12px 4px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
+  cursor: pointer;
+}
+.banner.banner-compact .banner-accent {
+  height: 3px;
+}
+.banner.banner-compact .banner-amount {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.banner.banner-compact .banner-eom {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  text-align: right;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  opacity: 0.92;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.banner.banner-compact .banner-label,
+.banner.banner-compact .banner-btns,
+.banner.banner-compact .banner-stmt,
+.banner.banner-compact .banner-env,
+.banner.banner-compact .banner-lim {
+  display: none !important;
+}
+@media (max-width: 360px) {
+  .banner.banner-compact {
+    padding: 6px 10px;
+    gap: 8px;
+  }
+  .banner.banner-compact .banner-amount {
+    font-size: 17px;
+  }
+  .banner.banner-compact .banner-eom {
+    font-size: 11.5px;
+  }
 }
 .banner-accent { position: absolute; top: 0; left: 0; right: 0; height: 5px; }
 .banner-label { grid-column: 1; font-size: 13px; opacity: 0.85; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -181,8 +249,8 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .day + li .entry { border-radius: 10px 10px 0 0; }
 .feed li:has(+ .day) .entry, .feed li:has(+ .horizon-li) .entry, .feed li:last-child .entry { border-radius: 0 0 10px 10px; }
 .day + li:has(+ .day) .entry, .day + li:has(+ .horizon-li) .entry, .day + li:last-child .entry { border-radius: 10px; }
-/* jumping to today: land the day heading just below the sticky top bar + account tabs */
-.feed .day { scroll-margin-top: calc(57px + 61px + env(safe-area-inset-top)); }
+/* jumping to today: land the day heading just below the sticky top bar + account tabs + compact banner */
+.feed .day { scroll-margin-top: calc(57px + 61px + 44px + env(safe-area-inset-top)); }
 .horizon-li { padding-top: 10px; }
 .entry-main { flex: 1; min-width: 0; display: grid; }
 .entry-desc { display: flex; min-width: 0; white-space: nowrap; font-weight: 500; }

@@ -867,9 +867,11 @@ function render() {
   if (!isGrid() && state.lastRenderWasGrid) state.listScrollToToday = true;
   state.lastRenderWasGrid = isGrid();
   if (isGrid()) {
+    listScrollCleanup?.();
     $('fab').hidden = true;
     renderGrid(accounts);
   } else if (state.summary) {
+    listScrollCleanup?.();
     $('fab').hidden = true; // Summary doesn't know which account to add to
     renderSummary(accounts);
   } else {
@@ -1004,11 +1006,51 @@ function renderSummary(accounts) {
   }
 }
 
+let listScrollCleanup = null;
+
 function renderList(accounts) {
+  listScrollCleanup?.();
+
   const active = accountById(state.activeAccountId);
   const tabs = accountTabs(accounts);
   const view = viewLedger();
   const banner = bannerCard(active, view, todayIso());
+
+  const bannerWrap = h('div', { class: 'banner-wrap' },
+    h('div', { class: 'banner-sticky' }, banner));
+
+  banner.addEventListener('click', () => {
+    if (banner.classList.contains('banner-compact')) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  });
+
+  function updateCompact() {
+    const isCompact = banner.classList.contains('banner-compact');
+    const isScrolled = isCompact ? window.scrollY > 15 : window.scrollY > 35;
+    if (!isScrolled) {
+      const h = banner.offsetHeight;
+      if (h) bannerWrap.style.setProperty('--full-height', `${h}px`);
+    }
+    bannerWrap.classList.toggle('is-compact', isScrolled);
+    banner.classList.toggle('banner-compact', isScrolled);
+  }
+
+  let scrollTicking = false;
+  const onScroll = () => {
+    if (scrollTicking) return;
+    scrollTicking = true;
+    requestAnimationFrame(() => {
+      scrollTicking = false;
+      updateCompact();
+    });
+  };
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+  listScrollCleanup = () => {
+    window.removeEventListener('scroll', onScroll);
+    listScrollCleanup = null;
+  };
 
   // Oldest first, same order as the grid: future entries at the bottom.
   const running = accountRunning(view, active);
@@ -1071,10 +1113,13 @@ function renderList(accounts) {
   const more = horizonControl('horizon-list');
   if (more) feed.append(h('li', { class: 'horizon-li' }, more));
 
-  const wrap = h('div', { class: 'list-view' }, tabs, banner, feed);
+  const wrap = h('div', { class: 'list-view' }, tabs, bannerWrap, feed);
   addSwipe(wrap, accounts);
   app.replaceChildren(wrap);
   tabs.querySelector('.tab-active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+  const fullH = banner.offsetHeight;
+  if (fullH) bannerWrap.style.setProperty('--full-height', `${fullH}px`);
 
   // On opening (and switching account), jump to today's first entry — or,
   // if nothing is dated today, the most recent day before it. Ordinary
@@ -1085,7 +1130,10 @@ function renderList(accounts) {
     requestAnimationFrame(() => {
       if (target) target.scrollIntoView({ block: 'start' });
       else window.scrollTo(0, 0);
+      updateCompact();
     });
+  } else {
+    requestAnimationFrame(updateCompact);
   }
 }
 
