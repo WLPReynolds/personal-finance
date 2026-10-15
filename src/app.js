@@ -3137,6 +3137,27 @@ function ticketSection() {
     h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn-primary', id: 'ticketSave', onclick: save }, 'Save')));
 }
 
+/** Remembered across renderSettings() rebuilds (a save re-renders), so the section doesn't snap shut under your thumb. */
+let trackerGroupOpen = false;
+
+/**
+ * v0.14.7: everything about the ticket tracker in one collapsible section —
+ * the tracker's figures and ⚙ Ticket purchases. Shown only where the ledger
+ * already uses the tracker (a tracker-fed recurring item, or ticket purchases
+ * set up, even if switched off now); anywhere else — Alison's — it isn't drawn
+ * at all. Closed by default.
+ */
+function trackerGroup(l, st, children) {
+  if (!usesTracker(l) && !ticketSettingsRecord(l)) return null;
+  const warn = state.tracker?.error || state.tracker?.estimates?.ticketsError;
+  return h('details', {
+    class: 'settings-section tracker-group', id: 'trackerSection', open: trackerGroupOpen,
+    ontoggle: (e) => { trackerGroupOpen = e.currentTarget.open; },
+  },
+  h('summary', {}, h('h3', {}, 'Ticket tracker'), warn ? h('span', { class: 'tracker-flag warn small' }, ' · needs attention') : null),
+  h('div', { class: 'tracker-body' }, children));
+}
+
 function renderSettings() {
   const dlg = $('settingsDialog');
   const l = state.ledger;
@@ -3204,8 +3225,9 @@ function renderSettings() {
 
     backupsSection(st),
 
-    usesTracker(l) ? h('section', { class: 'settings-section', id: 'trackerSection' },
-      h('h3', {}, 'Ticket tracker'),
+    trackerGroup(l, st, [
+      usesTracker(l) ? [
+      h('h4', { class: 'tracker-sub' }, 'Figures from the tracker'),
       h('p', { class: 'small' }, (() => {
         const items = recurringItems(l).filter((i) => i.amountFrom === TRACKER_SOURCE).map((i) => i.description);
         const amounts = items.length ? `${items.join(', ')} take${items.length === 1 ? 's' : ''} ${items.length === 1 ? 'its' : 'their'} amount from the ticket tracker.` : '';
@@ -3213,9 +3235,9 @@ function renderSettings() {
       })()),
       h('p', { class: `small ${state.tracker?.error ? 'warn' : 'muted'}`, id: 'trackerStatusLine' }, trackerStatusText()),
       state.tracker?.estimates?.ticketsError ? h('p', { class: 'small warn' }, state.tracker.estimates.ticketsError) : null,
-      st.enabled ? h('button', { type: 'button', class: 'btn-secondary', onclick: checkTrackerFromTap }, 'Check now') : null) : null,
-
-    ticketSection(),
+      st.enabled ? h('button', { type: 'button', class: 'btn-secondary', onclick: checkTrackerFromTap }, 'Check now') : null,
+      ] : null,
+      ticketSection()]),
 
     h('section', { class: 'settings-section' },
       h('h3', {}, st.enabled ? 'Backup file' : 'Move data between devices'),
