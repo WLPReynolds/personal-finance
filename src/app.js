@@ -962,32 +962,52 @@ function bannerCard(active, view, today, { summary = false } = {}) {
   const eomIso = endOfMonthIso(today);
   const eomBal = balanceAsOf(view, active, eomIso);
   const open = () => openAccountTab(active.id);
-  return h('section', {
-    class: `banner ${summary ? 'banner-summary' : ''}`, style: { '--acc': style.colour, '--ink': style.ink },
-    ...(summary ? {
+
+  const limEl = (() => { const w = limitHeaderText(active, view); return w ? h('div', { class: `banner-lim ${w.cls}` }, w.text) : null; })();
+  const stmtEl = (() => {
+    const o = cardOutlook(active, view, today);
+    if (!o) return null;
+    return h('button', { type: 'button', class: 'banner-stmt', onclick: () => openStatementDialog(active.id, o.st.month) }, outlookText(active, o), ' ›');
+  })();
+  const envEl = envBannerBlock(active, today);
+
+  if (summary) {
+    return h('section', {
+      class: 'banner banner-summary', style: { '--acc': style.colour, '--ink': style.ink },
       role: 'button', tabindex: '0', 'aria-label': `Open ${active.name}`, dataset: { summaryFor: active.id },
       // the statement line and envelope chips keep their own taps
       onclick: (e) => { if (!e.target.closest('button')) open(); },
       onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); open(); } },
-    } : {}),
+    },
+      style.accent ? h('div', { class: 'banner-accent', style: { background: style.accent } }) : null,
+      h('div', { class: 'banner-name' }, style.icon === 'people' ? peopleIcon(15) : null, active.name),
+      h('div', { class: 'banner-label' }, showsOwed(active) ? 'Owed today' : 'Balance today'),
+      h('div', { class: `banner-amount ${bal < 0 ? 'neg' : ''}` }, formatPence(bal)),
+      h('div', { class: 'banner-eom' }, `${showsOwed(active) ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${monthYearLabel(eomIso)}`),
+      limEl,
+      stmtEl,
+      h('div', { class: 'banner-open', 'aria-hidden': 'true' }, '›'),
+      envEl);
+  }
+
+  // Account's own page banner: structured with a top row (balance + eom/buttons)
+  // and an animated drawer for extra details (limits, statements, envelopes)
+  // so the sticky collapse transition on scroll is completely smooth.
+  const hasDrawer = Boolean(limEl || stmtEl || envEl);
+  return h('section', {
+    class: 'banner', style: { '--acc': style.colour, '--ink': style.ink },
   },
     style.accent ? h('div', { class: 'banner-accent', style: { background: style.accent } }) : null,
-    summary ? h('div', { class: 'banner-name' }, style.icon === 'people' ? peopleIcon(15) : null, active.name) : null,
-    h('div', { class: 'banner-label' }, !summary && style.icon === 'people' ? peopleIcon(14) : null, showsOwed(active) ? 'Owed today' : 'Balance today'),
-    h('div', { class: `banner-amount ${bal < 0 ? 'neg' : ''}` }, formatPence(bal)),
-    h('div', { class: 'banner-eom' }, `${showsOwed(active) ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${monthYearLabel(eomIso)}`),
-    (() => { const w = limitHeaderText(active, view); return w ? h('div', { class: `banner-lim ${w.cls}` }, w.text) : null; })(),
-    (() => {
-      const o = cardOutlook(active, view, today);
-      if (!o) return null;
-      return h('button', { type: 'button', class: 'banner-stmt', onclick: () => openStatementDialog(active.id, o.st.month) }, outlookText(active, o), ' ›');
-    })(),
-    summary
-      ? h('div', { class: 'banner-open', 'aria-hidden': 'true' }, '›')
-      : h('div', { class: 'banner-btns' },
+    h('div', { class: 'banner-main' },
+      h('div', { class: 'banner-lead' },
+        h('div', { class: 'banner-label' }, style.icon === 'people' ? peopleIcon(14) : null, showsOwed(active) ? 'Owed today' : 'Balance today'),
+        h('div', { class: `banner-amount ${bal < 0 ? 'neg' : ''}` }, formatPence(bal))),
+      h('div', { class: 'banner-side' },
+        h('div', { class: 'banner-btns' },
           h('button', { type: 'button', class: 'banner-edit', onclick: () => openAccountDialog(active.id) }, 'Account…'),
           h('button', { type: 'button', class: 'banner-edit banner-rec', onclick: () => openReconcileDialog(active.id) }, 'Reconcile…')),
-    envBannerBlock(active, today));
+        h('div', { class: 'banner-eom' }, `${showsOwed(active) ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${monthYearLabel(eomIso)}`))),
+    hasDrawer ? h('div', { class: 'banner-drawer' }, limEl, stmtEl, envEl) : null);
 }
 
 /** v0.14 phone landing page: every visible account's header card. */
@@ -1016,8 +1036,7 @@ function renderList(accounts) {
   const view = viewLedger();
   const banner = bannerCard(active, view, todayIso());
 
-  const bannerWrap = h('div', { class: 'banner-wrap' },
-    h('div', { class: 'banner-sticky' }, banner));
+  const bannerBar = h('div', { class: 'banner-bar' }, banner);
 
   banner.addEventListener('click', () => {
     if (banner.classList.contains('banner-compact')) {
@@ -1027,12 +1046,7 @@ function renderList(accounts) {
 
   function updateCompact() {
     const isCompact = banner.classList.contains('banner-compact');
-    const isScrolled = isCompact ? window.scrollY > 15 : window.scrollY > 35;
-    if (!isScrolled) {
-      const h = banner.offsetHeight;
-      if (h) bannerWrap.style.setProperty('--full-height', `${h}px`);
-    }
-    bannerWrap.classList.toggle('is-compact', isScrolled);
+    const isScrolled = isCompact ? window.scrollY > 10 : window.scrollY > 25;
     banner.classList.toggle('banner-compact', isScrolled);
   }
 
@@ -1113,13 +1127,10 @@ function renderList(accounts) {
   const more = horizonControl('horizon-list');
   if (more) feed.append(h('li', { class: 'horizon-li' }, more));
 
-  const wrap = h('div', { class: 'list-view' }, tabs, bannerWrap, feed);
+  const wrap = h('div', { class: 'list-view' }, tabs, bannerBar, feed);
   addSwipe(wrap, accounts);
   app.replaceChildren(wrap);
   tabs.querySelector('.tab-active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-
-  const fullH = banner.offsetHeight;
-  if (fullH) bannerWrap.style.setProperty('--full-height', `${fullH}px`);
 
   // On opening (and switching account), jump to today's first entry — or,
   // if nothing is dated today, the most recent day before it. Ordinary

@@ -160,71 +160,171 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   border: 1px solid var(--line-strong); background: var(--surface); border-radius: 999px; padding: 8px 14px; min-height: 40px; cursor: pointer; font-weight: 600; font-size: 14px;
 }
 .tab-active { border-color: var(--acc); box-shadow: inset 0 0 0 1px var(--acc); }
-.banner-wrap {
-  position: relative;
-}
-.banner-wrap.is-compact {
-  min-height: var(--full-height, auto);
-}
-.banner-wrap.is-compact .banner-sticky {
+.banner-bar {
   position: sticky;
   top: calc(57px + 61px + env(safe-area-inset-top));
   z-index: 9;
   background: var(--bg);
-  padding: 2px 0 4px;
+  padding: 0 0 6px;
 }
 .banner {
-  position: relative; margin: 0 12px 8px; padding: 14px 16px; border-radius: var(--radius); color: var(--ink, #fff); overflow: hidden;
+  position: relative;
+  margin: 0 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  color: var(--ink, #fff);
   background: var(--acc);
-  display: grid; grid-template-columns: 1fr auto; align-items: end;
-  transition: padding 0.22s ease, margin 0.22s ease, border-radius 0.22s ease, box-shadow 0.22s ease;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
+  transition: padding 0.28s cubic-bezier(0.2, 0, 0, 1),
+              border-radius 0.28s cubic-bezier(0.2, 0, 0, 1),
+              box-shadow 0.28s cubic-bezier(0.2, 0, 0, 1);
 }
-.banner.banner-compact {
+.banner.banner-summary {
+  margin: 0 12px 8px;
   display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: 4px 12px;
-  margin: 0 12px 4px;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+}
+.banner-accent { position: absolute; top: 0; left: 0; right: 0; height: 5px; }
+
+/* ---- non-summary banner: flex layout with animated drawer */
+.banner-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+.banner-lead {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.banner-label {
+  font-size: 13px;
+  opacity: 0.85;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  max-height: 22px;
+  margin-bottom: 2px;
+  overflow: hidden;
+  transition: max-height 0.25s cubic-bezier(0.2, 0, 0, 1),
+              opacity 0.2s ease,
+              margin 0.25s ease;
+}
+.banner-amount {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  white-space: nowrap;
+  transition: font-size 0.28s cubic-bezier(0.2, 0, 0, 1);
+}
+.banner-amount.neg {
+  color: var(--ink, #fff) !important;
+  text-decoration: underline wavy color-mix(in srgb, var(--ink, #fff) 60%, transparent);
+}
+.banner-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+  transition: gap 0.25s ease;
+}
+.banner-btns {
+  display: flex;
+  gap: 6px;
+  max-height: 38px;
+  opacity: 1;
+  overflow: hidden;
+  transition: max-height 0.25s cubic-bezier(0.2, 0, 0, 1),
+              opacity 0.2s ease,
+              transform 0.25s ease,
+              margin 0.25s ease;
+}
+.banner-edit {
+  background: color-mix(in srgb, var(--ink, #fff) 18%, transparent);
+  color: var(--ink, #fff);
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.banner-eom {
+  font-size: 13px;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1.2;
+  transition: font-size 0.28s cubic-bezier(0.2, 0, 0, 1),
+              opacity 0.25s ease;
+}
+.banner-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 400px;
+  opacity: 1;
+  overflow: hidden;
+  margin-top: 10px;
+  transition: max-height 0.3s cubic-bezier(0.2, 0, 0, 1),
+              opacity 0.2s ease,
+              margin 0.3s cubic-bezier(0.2, 0, 0, 1);
+}
+.banner-drawer .banner-stmt { align-self: flex-start; margin-top: 0; }
+.banner-drawer .banner-env { margin-top: 0; }
+.banner-drawer .banner-lim { align-self: flex-start; margin-top: 0; }
+
+/* ---- compact collapsed state on scroll */
+.banner.banner-compact {
   padding: 8px 14px;
   border-radius: 10px;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 18%);
   cursor: pointer;
 }
 .banner.banner-compact .banner-accent {
   height: 3px;
 }
+.banner.banner-compact .banner-main {
+  align-items: center;
+}
+.banner.banner-compact .banner-label {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+  pointer-events: none;
+}
 .banner.banner-compact .banner-amount {
-  grid-column: 1;
-  grid-row: 1;
   font-size: 19px;
-  font-weight: 700;
-  line-height: 1.15;
-  white-space: nowrap;
+}
+.banner.banner-compact .banner-side {
+  gap: 0;
+}
+.banner.banner-compact .banner-btns {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
 }
 .banner.banner-compact .banner-eom {
-  grid-column: 2;
-  grid-row: 1;
-  justify-self: end;
-  text-align: right;
   font-size: 12.5px;
-  font-weight: 500;
-  line-height: 1.2;
-  opacity: 0.92;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  opacity: 0.95;
 }
-.banner.banner-compact .banner-label,
-.banner.banner-compact .banner-btns,
-.banner.banner-compact .banner-stmt,
-.banner.banner-compact .banner-env,
-.banner.banner-compact .banner-lim {
-  display: none !important;
+.banner.banner-compact .banner-drawer {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+  pointer-events: none;
 }
 @media (max-width: 360px) {
   .banner.banner-compact {
     padding: 6px 10px;
-    gap: 8px;
   }
   .banner.banner-compact .banner-amount {
     font-size: 17px;
@@ -233,12 +333,6 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
     font-size: 11.5px;
   }
 }
-.banner-accent { position: absolute; top: 0; left: 0; right: 0; height: 5px; }
-.banner-label { grid-column: 1; font-size: 13px; opacity: 0.85; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-.banner-amount { grid-column: 1; font-size: 30px; font-weight: 700; letter-spacing: -0.02em; }
-.banner-amount.neg { color: var(--ink, #fff) !important; text-decoration: underline wavy color-mix(in srgb, var(--ink, #fff) 60%, transparent); }
-.banner-eom { grid-column: 1; font-size: 13px; opacity: 0.85; font-variant-numeric: tabular-nums; }
-.banner-edit { grid-column: 2; grid-row: 1 / span 3; align-self: center; background: color-mix(in srgb, var(--ink, #fff) 18%, transparent); color: var(--ink, #fff); border: 0; border-radius: 999px; padding: 8px 12px; cursor: pointer; font-weight: 600; font-size: 13px; }
 .feed { list-style: none; margin: 0; padding: 0 12px; }
 .day { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; padding: 14px 4px 6px; }
 .entry {
