@@ -564,3 +564,15 @@ li.env-hist-row { cursor: default; }
 .rec-acc-head { display: flex; align-items: center; gap: 8px; margin: 14px 0 6px; }
 .rec-acc-head:first-of-type { margin-top: 8px; }
 .rec-acc-count { font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+/* v0.14.7: collapsible Ticket tracker group in settings */
+.tracker-group > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 4px; -webkit-tap-highlight-color: transparent; }
+.tracker-group > summary::-webkit-details-marker { display: none; }
+.tracker-group > summary h3 { margin: 0; display: inline; }
+.tracker-group > summary::before { content: '▸'; display: inline-block; width: 1em; color: var(--muted); transition: transform .15s; }
+.tracker-group[open] > summary::before { transform: rotate(90deg); }
+.tracker-group > summary:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+.tracker-body { padding-top: 8px; }
+.tracker-sub { margin: 8px 0 2px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.tracker-body .settings-section { border-top: 1px solid var(--line); margin-top: 12px; }
+.tracker-body .settings-section h3 { font-size: 14px; }
