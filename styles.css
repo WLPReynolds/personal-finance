@@ -152,7 +152,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .list-view { padding-bottom: 96px; max-width: 720px; margin: 0 auto; min-height: calc(100dvh - 60px); }
 .tabs {
   display: flex; gap: 6px; overflow-x: auto; padding: 10px 12px; scrollbar-width: none;
-  position: sticky; top: calc(57px + env(safe-area-inset-top)); z-index: 10; background: var(--bg);
+  position: sticky; top: calc(57px + env(safe-area-inset-top, 0px)); z-index: 10; background: var(--bg);
 }
 .tabs::-webkit-scrollbar { display: none; }
 .tab {
@@ -162,7 +162,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .tab-active { border-color: var(--acc); box-shadow: inset 0 0 0 1px var(--acc); }
 .banner-bar {
   position: sticky;
-  top: calc(57px + 61px + env(safe-area-inset-top));
+  top: calc(57px + 61px + env(safe-area-inset-top, 0px));
   z-index: 9;
   background: var(--bg);
   padding: 0 0 6px;
@@ -186,7 +186,10 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   grid-template-columns: 1fr auto;
   align-items: end;
 }
-.banner-accent { position: absolute; top: 0; left: 0; right: 0; height: 5px; }
+.banner-accent {
+  position: absolute; top: 0; left: 0; right: 0; height: 5px;
+  transition: height 0.28s cubic-bezier(0.2, 0, 0, 1);
+}
 
 /* ---- non-summary banner: flex layout with animated drawer */
 .banner-main {
@@ -209,8 +212,10 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   max-height: 22px;
   margin-bottom: 2px;
   overflow: hidden;
+  transform: translateY(0);
   transition: max-height 0.25s cubic-bezier(0.2, 0, 0, 1),
               opacity 0.2s ease,
+              transform 0.25s ease,
               margin 0.25s ease;
 }
 .banner-amount {
@@ -229,20 +234,27 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  justify-content: flex-end;
   gap: 8px;
   flex-shrink: 0;
+  text-align: right;
   transition: gap 0.25s ease;
 }
 .banner-btns {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  align-self: flex-end;
   gap: 6px;
-  max-height: 38px;
+  max-height: 80px;
   opacity: 1;
   overflow: hidden;
-  transition: max-height 0.25s cubic-bezier(0.2, 0, 0, 1),
+  transform: translateY(0);
+  transition: max-height 0.28s cubic-bezier(0.2, 0, 0, 1),
               opacity 0.2s ease,
-              transform 0.25s ease,
-              margin 0.25s ease;
+              transform 0.28s ease,
+              margin 0.28s ease;
 }
 .banner-edit {
   background: color-mix(in srgb, var(--ink, #fff) 18%, transparent);
@@ -254,13 +266,18 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   font-weight: 600;
   font-size: 13px;
   white-space: nowrap;
+  transition: background 0.15s ease, filter 0.15s ease;
 }
+.banner-edit:hover { background: color-mix(in srgb, var(--ink, #fff) 28%, transparent); }
+.banner-edit:active { filter: brightness(0.92); }
 .banner-eom {
   font-size: 13px;
   opacity: 0.85;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   line-height: 1.2;
+  text-align: right;
+  align-self: flex-end;
   transition: font-size 0.28s cubic-bezier(0.2, 0, 0, 1),
               opacity 0.25s ease;
 }
@@ -272,8 +289,10 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   opacity: 1;
   overflow: hidden;
   margin-top: 10px;
+  transform: translateY(0);
   transition: max-height 0.3s cubic-bezier(0.2, 0, 0, 1),
               opacity 0.2s ease,
+              transform 0.3s ease,
               margin 0.3s cubic-bezier(0.2, 0, 0, 1);
 }
 .banner-drawer .banner-stmt { align-self: flex-start; margin-top: 0; }
@@ -297,6 +316,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   max-height: 0;
   opacity: 0;
   margin: 0;
+  transform: translateY(-4px);
   pointer-events: none;
 }
 .banner.banner-compact .banner-amount {
@@ -315,11 +335,13 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .banner.banner-compact .banner-eom {
   font-size: 12.5px;
   opacity: 0.95;
+  text-align: right;
 }
 .banner.banner-compact .banner-drawer {
   max-height: 0;
   opacity: 0;
   margin: 0;
+  transform: translateY(-6px);
   pointer-events: none;
 }
 @media (max-width: 360px) {
@@ -344,7 +366,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .feed li:has(+ .day) .entry, .feed li:has(+ .horizon-li) .entry, .feed li:last-child .entry { border-radius: 0 0 10px 10px; }
 .day + li:has(+ .day) .entry, .day + li:has(+ .horizon-li) .entry, .day + li:last-child .entry { border-radius: 10px; }
 /* jumping to today: land the day heading just below the sticky top bar + account tabs + compact banner */
-.feed .day { scroll-margin-top: calc(57px + 61px + 44px + env(safe-area-inset-top)); }
+.feed .day { scroll-margin-top: calc(57px + 61px + 44px + env(safe-area-inset-top, 0px)); }
 .horizon-li { padding-top: 10px; }
 .entry-main { flex: 1; min-width: 0; display: grid; }
 .entry-desc { display: flex; min-width: 0; white-space: nowrap; font-weight: 500; }
@@ -564,8 +586,6 @@ body.mode-grid .toast { bottom: 24px; }
 .acc-rec { font-size: 15px; }
 .grid td.cell.is-rec::before { content: '✓ '; color: var(--credit); font-weight: 700; }
 .rec-tick { color: var(--credit); font-weight: 700; }
-.banner-btns { grid-column: 2; grid-row: 1 / span 3; align-self: center; display: grid; gap: 6px; }
-.banner-btns .banner-edit { grid-column: auto; grid-row: auto; }
 .recon-summary { display: grid; gap: 4px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .recon-line { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
 .recon-result { font-weight: 700; font-size: 15px; padding-top: 4px; }
