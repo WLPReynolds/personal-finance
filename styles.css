@@ -576,3 +576,28 @@ li.env-hist-row { cursor: default; }
 .tracker-sub { margin: 8px 0 2px; font-size: 13px; color: var(--muted); font-weight: 600; }
 .tracker-body .settings-section { border-top: 1px solid var(--line); margin-top: 12px; }
 .tracker-body .settings-section h3 { font-size: 14px; }
+
+/* ---- footer version tag */
+.app-footer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 24px 16px calc(36px + env(safe-area-inset-bottom));
+  margin-top: 16px;
+}
+.version-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 4px 12px;
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+

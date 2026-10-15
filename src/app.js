@@ -3939,6 +3939,8 @@ function checkPageVersion() {
 
 async function start() {
   $('brandVersion').textContent = `v${APP_VERSION}`;
+  const footerEl = $('footerVersion');
+  if (footerEl) footerEl.textContent = `Personal Finance · v${APP_VERSION}`;
   try { checkPageVersion(); } catch (err) { console.error(err); }
   let header = null;
   try {
