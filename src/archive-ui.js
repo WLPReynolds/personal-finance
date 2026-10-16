@@ -313,7 +313,15 @@ export function createArchiveUI(ctx) {
 
   // ---------------------------------------------------------------- viewer
 
-  const view = { year: null, query: '', accountKeys: new Set(), order: 'sheet' };
+  // v0.14.9: a search starts at MIN_SEARCH characters, or straight away on Enter
+  // (forced = the text Enter was pressed on, so "BP" or "tax" can still be found)
+  const MIN_SEARCH = 3;
+  const view = { year: null, query: '', forced: null, accountKeys: new Set(), order: 'sheet' };
+  /** The text actually searched for: '' while it's too short and Enter wasn't pressed. */
+  const activeQuery = () => {
+    const q = view.query.trim();
+    return q.length >= MIN_SEARCH || (q && view.forced === q) ? q : '';
+  };
   const oooInfo = new WeakMap(); // year object → Map(row n → between)
 
   function betweenFor(year) {
@@ -337,13 +345,33 @@ export function createArchiveUI(ctx) {
     openDialog($('archiveDialog'));
   }
 
-  const searching = () => Boolean(view.query.trim()) || view.accountKeys.size > 0;
+  const searching = () => Boolean(activeQuery()) || view.accountKeys.size > 0;
 
   function renderViewer() {
     const dlg = $('archiveDialog');
     const accounts = archiveAccounts(archive);
     const search = h('input', { type: 'search', class: 'arch-search', placeholder: 'Search every year, e.g. car parking', value: view.query, 'aria-label': 'Search history',
-      oninput: () => { view.query = search.value; clearTimeout(renderViewer.t); renderViewer.t = setTimeout(drawResults, 150); } });
+      oninput: () => {
+        view.query = search.value;
+        clear.hidden = !search.value;
+        clearTimeout(renderViewer.t);
+        renderViewer.t = setTimeout(drawResults, 150);
+      },
+      onkeydown: (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        view.forced = search.value.trim();
+        clearTimeout(renderViewer.t);
+        drawResults();
+      } });
+    const clear = h('button', { type: 'button', class: 'arch-clear', 'aria-label': 'Clear search', title: 'Clear search', hidden: !view.query,
+      onclick: () => {
+        view.query = ''; view.forced = null; search.value = ''; clear.hidden = true;
+        clearTimeout(renderViewer.t);
+        drawResults();
+        search.focus();
+      } }, '✕');
+    const searchBox = h('div', { class: 'arch-searchbox' }, search, clear);
     const yearSel = h('select', { class: 'arch-year', 'aria-label': 'Year', onchange: () => { view.year = Number(yearSel.value); drawResults(); } },
       yearsOf(archive).map((y) => h('option', { value: String(y.year), selected: y.year === view.year }, String(y.year))));
     const chips = h('div', { class: 'arch-chips', role: 'group', 'aria-label': 'Accounts' },
@@ -363,7 +391,7 @@ export function createArchiveUI(ctx) {
       }, label)));
     const results = h('div', { class: 'arch-results' });
     dlg.replaceChildren(...win(dlg, 'History', h('span', { class: 'muted small arch-ro' }, 'read only'), 'arch-body',
-      h('div', { class: 'arch-tools' }, search, yearSel, order),
+      h('div', { class: 'arch-tools' }, searchBox, yearSel, order),
       chips,
       h('p', { class: 'muted small arch-summary', id: 'archSummary' }),
       results));
@@ -382,12 +410,15 @@ export function createArchiveUI(ctx) {
     if (!on) {
       const year = archive.years[view.year];
       const items = yearView(year);
-      summary.textContent = `${year.year} · sheet “${year.sheet}” · ${plural(year.rows.length, 'row')} · imported ${longDate(year.importedAt.slice(0, 10))}`;
+      const typed = view.query.trim();
+      summary.textContent = typed
+        ? `Keep typing — the search starts at ${MIN_SEARCH} letters (or press Enter to search for “${typed}”)`
+        : `${year.year} · sheet “${year.sheet}” · ${plural(year.rows.length, 'row')} · imported ${longDate(year.importedAt.slice(0, 10))}`;
       results.replaceChildren(wide ? yearTable(year.accounts, [{ year: year.year, items, yearObj: year }], { totals: false, balances: true })
         : yearList(year.accounts, [{ year: year.year, items, yearObj: year }], { totals: false, balances: true }));
       return;
     }
-    const r = searchArchive(archive, { query: view.query, accountKeys: view.accountKeys, order: view.order });
+    const r = searchArchive(archive, { query: activeQuery(), accountKeys: view.accountKeys, order: view.order });
     const all = archiveAccounts(archive);
     const used = new Set(r.years.flatMap((y) => Object.keys(y.totals)));
     const accounts = all.filter((a) => (view.accountKeys.size ? view.accountKeys.has(a.key) : used.has(a.key)));

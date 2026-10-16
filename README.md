@@ -4,7 +4,11 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.14.9 — history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.14.10 — history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.14.10:** history search starts at 3 letters (a hint shows until then), or
+straight away with **Enter** for something shorter ("BP"). A ✕ inside the
+search box clears it (our own, so Firefox gets one too). e2e 70 checks.
 
 **v0.14.9:** the history and import dialogs are "windows" (class `window`): a
 title bar that never scrolls away with the ✕ always at its right, the content
