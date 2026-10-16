@@ -1,4 +1,4 @@
-"""v0.14.8 — history imported from Excel: ⚙ section, import (names per column
+"""v0.14.8 (+ v0.14.9 window: title bar, ✕ always in view, closes only from ✕) — history imported from Excel: ⚙ section, import (names per column
 group, generic labels asked per sheet, the check page), the viewer on desktop
 (spreadsheet grid, out-of-order flag, month lines, carried balances) and phone
 (list), search across years with yearly totals and a grand total, account
@@ -48,6 +48,10 @@ def connect(pg):
     open_settings(pg)
     pg.click('#settingsDialog button:has-text("Connect Google Drive")')
     pg.wait_for_function('() => /Synced/.test(document.getElementById("syncChip").textContent)', timeout=8000)
+def close_in_view(pg, dlg):
+    """The window's ✕ is inside the viewport, and the title bar didn't scroll away."""
+    return pg.evaluate("""(id) => { const b = document.querySelector('#' + id + ' .win-close').getBoundingClientRect();
+        return b.width > 0 && b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight; }""", dlg)
 def archive_files(include_trashed=False):
     return sorted(f['name'] for f in drive.values() if not f['folder'] and f['name'].startswith('archive-') and (include_trashed or not f['trashed']))
 
@@ -111,6 +115,9 @@ try:
         check('names suggested from the header labels', names == ['Chase', 'Nationwide', 'Current Account', 'Nationwide', 'Current Account', 'Nationwide', 'Barclaycard'], names)
         warns = desk.locator('#archiveImportDialog .arch-group .warn-text').count()
         check('generic "Current Account" flagged on each sheet it appears on', warns == 2, warns)
+        desk.evaluate("document.querySelector('#archiveImportDialog .win-body').scrollTop = 99999")
+        check('import window: ✕ still in view after scrolling the names page', close_in_view(desk, 'archiveImportDialog'))
+        desk.evaluate("document.querySelector('#archiveImportDialog .win-body').scrollTop = 0")
         desk.screenshot(path=f'{OUT}/v0148-1-names.png')
         # 2025 and 2026 current accounts were Chase too
         groups = desk.locator('#archiveImportDialog .arch-group input')
@@ -156,6 +163,18 @@ try:
         check('grid: stored values as the sheet has them (float noise gone)', dd[3] == '774.95' and dd[4] == '6,195.80' and dd[8] == '774.95' and dd[10] == '10.89', dd)
         check('grid: Brought forward row', 'row-bf' in (rows.nth(0).get_attribute('class') or ''))
         desk.screenshot(path=f'{OUT}/v0148-3-desktop-2026.png')
+        w = desk.evaluate("document.getElementById('archiveDialog').getBoundingClientRect().width")
+        check('history window nearly full width on desktop', w >= 1360, w)
+        check('history window: ✕ in view', close_in_view(desk, 'archiveDialog'))
+        desk.mouse.click(5, 5)  # outside the window
+        desk.wait_for_timeout(200)
+        check('a click outside does NOT close it', desk.locator('#archiveDialog[open]').count() == 1)
+        desk.focus('#archiveDialog .arch-search'); desk.keyboard.press('Escape')
+        desk.wait_for_timeout(200)
+        check('Escape does NOT close it', desk.locator('#archiveDialog[open]').count() == 1)
+        desk.evaluate("document.querySelector('#archiveDialog .arch-wrap').scrollTop = 99999")
+        check('history window: title bar stays put when the table scrolls', close_in_view(desk, 'archiveDialog'))
+        desk.evaluate("document.querySelector('#archiveDialog .arch-wrap').scrollTop = 0")
         desk.select_option('#archiveDialog .arch-year', '2024')
         heads = desk.eval_on_selector_all('#archiveDialog .arch-acc-name', 'els => els.map(e => e.textContent)')
         check('another year shows its own accounts', heads == ['Chase', 'Nationwide'], heads)
@@ -194,7 +213,7 @@ try:
         desk.fill('#archiveDialog .arch-search', 'zzz nothing')
         desk.wait_for_function('() => document.querySelector("#archiveDialog .arch-summary").textContent === "No matches"')
         check('no matches says so', True)
-        desk.click('#archiveDialog .sheet-head .icon-btn')
+        desk.click('#archiveDialog .win-close')
         check('no errors on desktop so far', not errors, errors)
 
         # ================================================================ phone: get from Drive
@@ -219,6 +238,9 @@ try:
         width = phone.evaluate('document.querySelector("#archiveDialog").scrollWidth - document.querySelector("#archiveDialog").clientWidth')
         check('phone: no sideways scroll in the viewer', width <= 0, width)
         phone.screenshot(path=f'{OUT}/v0148-5-phone-2026.png')
+        phone.evaluate("document.querySelector('#archiveDialog .arch-results').scrollTop = 99999")
+        check('phone: ✕ still in view after scrolling the list', close_in_view(phone, 'archiveDialog'))
+        phone.evaluate("document.querySelector('#archiveDialog .arch-results').scrollTop = 0")
         phone.fill('#archiveDialog .arch-search', 'parking')
         phone.wait_for_function('() => /^6 matches/.test(document.querySelector("#archiveDialog .arch-summary").textContent)')
         tl = phone.eval_on_selector_all('#archiveDialog .arch-total .arch-item-top', 'els => els.map(e => e.textContent)')
@@ -226,7 +248,7 @@ try:
         grand = phone.text_content('#archiveDialog .arch-grand')
         check('phone search: grand total per account', '−14.25' in grand and '−60.00' in grand and '−9.89' in grand, grand)
         phone.screenshot(path=f'{OUT}/v0148-6-phone-search.png', full_page=True)
-        phone.click('#archiveDialog .sheet-head .icon-btn')
+        phone.click('#archiveDialog .win-close')
 
         # ================================================================ import again replaces a year
         open_settings(desk)
@@ -247,7 +269,7 @@ try:
         toast_has(desk, 'History imported: 2026 and saved to Drive')
         after = {k: f['version'] for k, f in drive.items() if f['name'] == 'archive-2026.json' and not f['trashed']}
         check('import again: the Drive file for that year is overwritten, not duplicated', list(after) == list(before) and list(after.values())[0] > list(before.values())[0], (before, after))
-        desk.click('#archiveDialog .sheet-head .icon-btn')
+        desk.click('#archiveDialog .win-close')
 
         # ================================================================ delete
         dialogs.clear()

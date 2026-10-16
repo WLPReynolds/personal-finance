@@ -59,7 +59,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.8';
+export const APP_VERSION = '0.14.9';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -3807,8 +3807,13 @@ $('importInput').addEventListener('change', (e) => {
 });
 desktopQuery.addEventListener('change', () => { if (state.viewMode === 'auto' && state.ledger) render(); archiveUI.redraw(); });
 
-// tap outside a dialog's content closes it
+// tap outside a dialog's content closes it — except the v0.14.9 "window"
+// dialogs (history), which close only from their ✕, never by accident
 for (const d of document.querySelectorAll('dialog')) {
+  if (d.classList.contains('window')) {
+    d.addEventListener('cancel', (e) => e.preventDefault()); // Escape (e.g. clearing the search box) doesn't close it
+    continue;
+  }
   d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
 }
 

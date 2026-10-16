@@ -4,7 +4,13 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.14.8 — history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.14.9 — history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.14.9:** the history and import dialogs are "windows" (class `window`): a
+title bar that never scrolls away with the ✕ always at its right, the content
+scrolling underneath. They close **only** from the ✕ — not a tap outside, not
+Escape (which also clears the search box). The history window is almost the
+full screen width on desktop (up to 1800px). e2e `archive_v0148.py` now 64 checks.
 
 **v0.14.8: history from Budget.xlsx** (⚙ → History from Excel)
 - **Import:** choose the workbook; every year sheet is read on the device by a
