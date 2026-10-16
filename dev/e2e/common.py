@@ -62,6 +62,12 @@ def handle(route, request):
         if m.group(1) not in drive: return js({'error': {'message': 'not found'}}, 404)
         del drive[m.group(1)]
         return route.fulfill(status=204, body='')
+    if m and request.method == 'PATCH':  # v0.14.8: move to the bin
+        f = drive.get(m.group(1))
+        if not f: return js({'error': {'message': 'not found'}}, 404)
+        meta = json.loads(request.post_data or '{}')
+        if 'trashed' in meta: f['trashed'] = bool(meta['trashed'])
+        return js({'id': m.group(1)})
     m2 = re.fullmatch(r'/drive/v3/files/([^/]+)/copy', path)
     if m2 and request.method == 'POST':  # v0.9: daily backup = server-side copy
         src = drive[m2.group(1)]; meta = json.loads(request.post_data)

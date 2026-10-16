@@ -17,6 +17,7 @@ import { googleAuth } from './google-auth.js';
 import { googleDrive } from './drive.js';
 import { createSyncEngine } from './lib/sync-engine.js';
 import { shareTokenRequests } from './lib/shared-auth.js';
+import { createArchiveUI } from './archive-ui.js';
 import {
   JOINT_FOLDER_NAME, JOINT_FILE_NAME, emptyJointLedger, isJointLedger, addJointAccount, combineLedgers, splitLedger,
 } from './lib/joint.js';
@@ -58,7 +59,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.7';
+export const APP_VERSION = '0.14.8';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -194,7 +195,7 @@ function toast(message, kind = 'ok') {
   t.className = `toast toast-${kind}`;
   t.hidden = false;
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => (t.hidden = true), kind === 'error' ? 5000 : 2200);
+  toast.timer = setTimeout(() => (t.hidden = true), kind === 'ok' ? 2200 : 5000);
 }
 
 function accountById(id) {
@@ -480,6 +481,16 @@ const sync = createSyncEngine({
     saveSyncState,
   },
   afterSync: (token) => checkTracker(token),
+});
+
+// ---- v0.14.8: history imported from Budget.xlsx (src/archive-ui.js). Read
+// only and kept apart from the ledger: never in personal.json, the merge or sync.
+const archiveUI = createArchiveUI({
+  h, $, toast, openDialog, isOpen, sync, drive: syncDrive,
+  // rows from the day the app's own records start are left out of an import
+  firstLiveDate: () => (state.personal?.accounts ?? []).map((a) => a.openingDate).filter(Boolean).sort()[0] ?? null,
+  renderSettings: () => renderSettings(),
+  isWide: () => desktopQuery.matches,
 });
 
 // ---- v0.14 joint account: its own engine on its own file. Created only
@@ -3384,6 +3395,8 @@ function renderSettings() {
       h('p', { class: 'muted small' },
         `Last export: ${when(state.meta.lastExportAt)} · Last import: ${when(state.meta.lastImportAt)}${state.meta.lastImportFrom ? ` (from ${state.meta.lastImportFrom})` : ''}`)),
 
+    archiveUI.settingsSection(),
+
     h('section', { class: 'settings-section' },
       h('h3', {}, 'Recurring items'),
       h('p', { class: 'muted small' }, (() => {
@@ -3431,6 +3444,7 @@ function renderSettings() {
           await saveJointSettings(state.jointSettings);
           await removeJointData();
           state.joint = null;
+          await archiveUI.eraseLocal(); // v0.14.8: the imported history too (its Drive files are untouched)
           state.meta = {};
           await saveMeta(state.meta);
           dlg.close();
@@ -3791,7 +3805,7 @@ $('importInput').addEventListener('change', (e) => {
   e.target.value = '';
   if (f) doImport(f);
 });
-desktopQuery.addEventListener('change', () => state.viewMode === 'auto' && state.ledger && render());
+desktopQuery.addEventListener('change', () => { if (state.viewMode === 'auto' && state.ledger) render(); archiveUI.redraw(); });
 
 // tap outside a dialog's content closes it
 for (const d of document.querySelectorAll('dialog')) {

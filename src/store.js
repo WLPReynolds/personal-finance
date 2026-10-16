@@ -11,6 +11,8 @@
  *   'jointLedger', 'jointSync', 'jointSettings' (v0.14: the joint account's own
  *   local copy, its own Drive sync state, and this device's on/off switch —
  *   never mixed with the personal records above)
+ *   'archive' (v0.14.8: history imported from Budget.xlsx — read-only, never
+ *   in the ledger or synced with it; see lib/archive.js)
  */
 import { encryptValue, decryptValue, isEncryptedValue } from './lib/vault.js';
 
@@ -36,7 +38,7 @@ function openDb() {
 // and `vaultKey` holds the data key in memory while unlocked. The lock's
 // header ('vault') is the one record always saved in plain view.
 const VAULT = 'vault';
-const DATA_KEYS = ['ledger', 'meta', 'sync', 'bankHolidays', 'auth', 'trackerEstimates', 'jointLedger', 'jointSync', 'jointSettings'];
+const DATA_KEYS = ['ledger', 'meta', 'sync', 'bankHolidays', 'auth', 'trackerEstimates', 'jointLedger', 'jointSync', 'jointSettings', 'archive'];
 let vaultKey = null;
 
 export class LockedError extends Error {
@@ -122,6 +124,15 @@ export const saveJointSettings = (value) => put('jointSettings', value);
 /** "Remove joint data from this device": the local copy and its sync state (Drive untouched). */
 export async function removeJointData() {
   const run = writeChain.then(() => rawPutMany([['jointLedger', undefined], ['jointSync', undefined]]));
+  writeChain = run.catch(() => {});
+  return run;
+}
+
+/** v0.14.8: the imported history (lib/archive.js) — this device's copy; Drive keeps one file per year. */
+export const loadArchive = () => get('archive');
+export const saveArchive = (archive) => put('archive', archive);
+export async function removeArchive() {
+  const run = writeChain.then(() => rawPutMany([['archive', undefined]]));
   writeChain = run.catch(() => {});
   return run;
 }
