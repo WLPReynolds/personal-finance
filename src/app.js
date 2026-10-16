@@ -79,6 +79,7 @@ const state = {
   recGroup: readPref('recGroup', 'account'), // 'account' | 'date'
   gridScroll: null,
   listScrollToToday: true, // phone list: jump to today on open / account switch, not on every redraw
+  listOpenScrollY: 0,
   installPrompt: null,
   // Recurring items: how far ahead projected entries are shown. Every
   // device starts at 3 months each time the app opens; "show more" adds 3.
@@ -1026,6 +1027,30 @@ function renderSummary(accounts) {
   }
 }
 
+function getPredominantMonth(feedEl, topBound, bottomBound) {
+  const visibleHeights = {};
+  for (const li of feedEl.children) {
+    const month = li.dataset.month;
+    if (!month) continue;
+    const rect = li.getBoundingClientRect();
+    if (rect.bottom <= topBound) continue;
+    if (rect.top >= bottomBound) break;
+    const h = Math.min(rect.bottom, bottomBound) - Math.max(rect.top, topBound);
+    if (h > 0) {
+      visibleHeights[month] = (visibleHeights[month] || 0) + h;
+    }
+  }
+  let bestMonth = null;
+  let maxH = 0;
+  for (const [m, h] of Object.entries(visibleHeights)) {
+    if (h > maxH) {
+      maxH = h;
+      bestMonth = m;
+    }
+  }
+  return bestMonth;
+}
+
 let listScrollCleanup = null;
 
 function renderList(accounts) {
@@ -1037,6 +1062,8 @@ function renderList(accounts) {
   const banner = bannerCard(active, view, todayIso());
 
   const bannerBar = h('div', { class: 'banner-bar' }, banner);
+  const eomEl = banner.querySelector('.banner-eom');
+  const today = todayIso();
 
   banner.addEventListener('click', () => {
     if (banner.classList.contains('banner-compact')) {
@@ -1044,10 +1071,44 @@ function renderList(accounts) {
     }
   });
 
+  const monthTextCache = new Map();
+  function getEomText(monthIso) {
+    if (monthTextCache.has(monthIso)) return monthTextCache.get(monthIso);
+    const mEomIso = endOfMonthIso(`${monthIso}-01`);
+    const mBal = balanceAsOf(view, active, mEomIso);
+    const text = `${showsOwed(active) ? 'Owed ' : ''}${formatPence(mBal)} at end of ${monthYearLabel(mEomIso)}`;
+    monthTextCache.set(monthIso, text);
+    return text;
+  }
+
+  let currentPredominantMonth = null;
+
   function updateCompact() {
     const isCompact = banner.classList.contains('banner-compact');
-    const isScrolled = isCompact ? window.scrollY > 10 : window.scrollY > 25;
-    banner.classList.toggle('banner-compact', isScrolled);
+    const openY = state.listOpenScrollY ?? 0;
+    const threshold = openY + 25;
+    const expandThreshold = openY + 10;
+    const shouldBeCompact = isCompact ? window.scrollY > expandThreshold : window.scrollY > threshold;
+    banner.classList.toggle('banner-compact', shouldBeCompact);
+
+    if (eomEl) {
+      if (shouldBeCompact) {
+        const bannerRect = bannerBar.getBoundingClientRect();
+        const topBound = bannerRect.bottom;
+        const bottomBound = window.innerHeight;
+        const predMonth = getPredominantMonth(feed, topBound, bottomBound) || currentPredominantMonth || today.slice(0, 7);
+        if (predMonth !== currentPredominantMonth) {
+          currentPredominantMonth = predMonth;
+          eomEl.textContent = getEomText(predMonth);
+        }
+      } else {
+        const defaultMonth = today.slice(0, 7);
+        if (currentPredominantMonth !== defaultMonth) {
+          currentPredominantMonth = defaultMonth;
+          eomEl.textContent = getEomText(defaultMonth);
+        }
+      }
+    }
   }
 
   let scrollTicking = false;
@@ -1061,28 +1122,30 @@ function renderList(accounts) {
   };
 
   window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', onScroll, { passive: true });
   listScrollCleanup = () => {
     window.removeEventListener('scroll', onScroll);
+    window.removeEventListener('resize', onScroll);
     listScrollCleanup = null;
   };
 
   // Oldest first, same order as the grid: future entries at the bottom.
   const running = accountRunning(view, active);
-  const today = todayIso();
   const feed = h('ul', { class: 'feed' });
-  feed.append(h('li', { class: 'day', dataset: { date: active.openingDate } }, longDate(active.openingDate)),
-    h('li', {}, h('div', { class: 'entry entry-note' },
+  feed.append(h('li', { class: 'day', dataset: { date: active.openingDate, month: active.openingDate.slice(0, 7) } }, longDate(active.openingDate)),
+    h('li', { dataset: { month: active.openingDate.slice(0, 7) } }, h('div', { class: 'entry entry-note' },
       h('span', { class: 'entry-main' }, h('span', { class: 'entry-desc' }, 'Brought forward')),
       h('span', { class: 'entry-amts' }, h('span', { class: 'entry-bal' }, formatPence(displayOpening(active)))))));
   let lastDate = active.openingDate;
   for (const { transaction: t, runningBalance } of running) {
+    const tMonth = t.date.slice(0, 7);
     if (t.date !== lastDate) {
       lastDate = t.date;
-      feed.append(h('li', { class: `day ${t.date > today ? 'future' : ''}`, dataset: { date: t.date } }, longDate(t.date), t.date > today ? ' · upcoming' : ''));
+      feed.append(h('li', { class: `day ${t.date > today ? 'future' : ''}`, dataset: { date: t.date, month: tMonth } }, longDate(t.date), t.date > today ? ' · upcoming' : ''));
     }
     if (t.isStatement) {
       const st = t.statement;
-      feed.append(h('li', {}, h('button', {
+      feed.append(h('li', { dataset: { month: tMonth } }, h('button', {
         type: 'button', class: `entry entry-stmt ${st.date > today ? 'future' : ''}`,
         onclick: () => openStatementDialog(active.id, st.month),
       },
@@ -1100,7 +1163,7 @@ function renderList(accounts) {
     const tags = p ? projectionTags(p, today) : t.ticketAlert ? { cls: 'alert', label: ALERT_MISSING } : null;
     const env = envTag(t, active);
     const move = isEnvelopeMove(t);
-    feed.append(h('li', {},
+    feed.append(h('li', { dataset: { month: tMonth } },
       h('button', {
         type: 'button',
         class: `entry ${t.kind === 'note' ? 'entry-note' : ''} ${t.date > today ? 'future' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''} ${!p?.skipped && t.kind !== 'note' && limitClass(active, runningBalance) ? 'lim-row' : ''}`,
@@ -1132,6 +1195,11 @@ function renderList(accounts) {
   app.replaceChildren(wrap);
   tabs.querySelector('.tab-active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
+  const bannerH = bannerBar.offsetHeight || banner.offsetHeight;
+  if (bannerH) {
+    feed.style.setProperty('--banner-bar-h', `${bannerH}px`);
+  }
+
   // On opening (and switching account), jump to today's first entry — or,
   // if nothing is dated today, the most recent day before it. Ordinary
   // redraws (after a save, a sync) leave the scroll where it is.
@@ -1139,8 +1207,13 @@ function renderList(accounts) {
     state.listScrollToToday = false;
     const target = [...feed.querySelectorAll('li.day[data-date]')].filter((li) => li.dataset.date <= today).pop();
     requestAnimationFrame(() => {
-      if (target) target.scrollIntoView({ block: 'start' });
-      else window.scrollTo(0, 0);
+      if (target) {
+        target.scrollIntoView({ block: 'start' });
+        state.listOpenScrollY = window.scrollY;
+      } else {
+        window.scrollTo(0, 0);
+        state.listOpenScrollY = 0;
+      }
       updateCompact();
     });
   } else {
