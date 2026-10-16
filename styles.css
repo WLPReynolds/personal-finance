@@ -812,7 +812,14 @@ dialog.sheet-wide { height: 94dvh; }
 .arch-body > .arch-results { flex: 1; min-height: 0; overflow: auto; }
 .arch-ro { border: 1px solid var(--line-strong); border-radius: 999px; padding: 1px 8px; }
 .arch-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.arch-tools .arch-search { flex: 1 1 240px; min-width: 0; }
+.arch-searchbox { position: relative; flex: 1 1 240px; min-width: 0; }
+.arch-searchbox .arch-search { width: 100%; padding-right: 44px; }
+.arch-search::-webkit-search-cancel-button { display: none; } /* our own ✕ instead, in every browser */
+.arch-clear {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 16px; cursor: pointer;
+}
+.arch-clear:hover { background: var(--surface-2); color: var(--text); }
 .arch-tools .arch-year { flex: 0 0 auto; width: auto; }
 .arch-order { flex: 0 0 auto; }
 .arch-order .seg-btn { white-space: nowrap; }

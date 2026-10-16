@@ -5,7 +5,7 @@
  * phone still on the old version" problem. Bump VERSION on each deploy
  * anyway so old caches get cleaned up.
  */
-const VERSION = '0.14.9';
+const VERSION = '0.14.10';
 const CACHE = `finance-tracker-${VERSION}`;
 const SHELL = [
   './',
