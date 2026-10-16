@@ -788,11 +788,28 @@ li.env-hist-row { cursor: default; }
 
 
 /* ---- v0.14.8 history imported from Excel (read only) */
-dialog.sheet-wide { height: 94dvh; max-height: 94dvh; }
-@media (min-width: 640px) {
-  dialog.sheet-wide { width: min(1400px, 96vw); }
+/* v0.14.9: a "window" — title bar that never scrolls away, ✕ always at its right; body scrolls inside */
+dialog.window[open] { display: flex; flex-direction: column; overflow: hidden; }
+dialog.window { max-height: 94dvh; }
+.win-bar {
+  flex: none; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 6px 6px 16px;
+  background: var(--surface-2); border-bottom: 1px solid var(--line-strong); border-radius: inherit;
+  border-bottom-left-radius: 0; border-bottom-right-radius: 0;
 }
-.arch-body { min-height: 100%; align-content: start; }
+.win-title { flex: 1; min-width: 0; margin: 0; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.win-close {
+  flex: none; width: 40px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--text);
+  font-size: 18px; line-height: 1; cursor: pointer;
+}
+.win-close:hover { background: var(--danger); color: #fff; }
+.win-body { flex: 1; min-height: 0; overflow: auto; padding-top: 14px; }
+dialog.sheet-wide { height: 94dvh; }
+@media (min-width: 640px) {
+  dialog.sheet-wide { width: min(1800px, 98vw); }
+}
+.arch-body { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.arch-body > * { flex: none; min-width: 0; }
+.arch-body > .arch-results { flex: 1; min-height: 0; overflow: auto; }
 .arch-ro { border: 1px solid var(--line-strong); border-radius: 999px; padding: 1px 8px; }
 .arch-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .arch-tools .arch-search { flex: 1 1 240px; min-width: 0; }
@@ -809,7 +826,7 @@ dialog.sheet-wide { height: 94dvh; max-height: 94dvh; }
 .arch-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--acc, var(--muted)); flex: none; display: inline-block; }
 .arch-chip .arch-dot { background: var(--acc); }
 .arch-summary { margin: 0; min-height: 18px; }
-.arch-wrap { max-height: calc(94dvh - 210px); }
+.arch-results > .arch-wrap { max-height: 100%; }
 .arch-grid { --head1: 40px; }
 .arch-acc-head { height: 40px; vertical-align: top !important; padding: 0 8px 4px !important; border-right: 1px solid var(--line-strong); min-width: 220px; }
 .arch-acc-name { font-weight: 700; font-size: 14px; }

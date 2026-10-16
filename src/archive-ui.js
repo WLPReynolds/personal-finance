@@ -109,6 +109,21 @@ export function createArchiveUI(ctx) {
     })();
   }
 
+  /**
+   * v0.14.9: these two dialogs look like a window — a title bar that never
+   * scrolls away, with the ✕ always at its right — and close ONLY from the ✕
+   * (not a tap outside, not Escape: Wayne, 16 Oct). → [title bar, body]
+   */
+  function win(dlg, title, extra, bodyClass, ...children) {
+    return [
+      h('header', { class: 'win-bar' },
+        h('h2', { class: 'win-title' }, title),
+        extra,
+        h('button', { type: 'button', class: 'win-close', 'aria-label': 'Close', title: 'Close', onclick: () => dlg.close() }, '✕')),
+      h('div', { class: `sheet-body win-body ${bodyClass}` }, ...children),
+    ];
+  }
+
   // ---------------------------------------------------------------- import
 
   let imp = null; // { fileName, sheets: [{ parsed, include, names: [] }], step }
@@ -166,15 +181,11 @@ export function createArchiveUI(ctx) {
 
   function renderImport() {
     const dlg = $('archiveImportDialog');
-    const close = () => dlg.close();
-    const head = (title) => h('header', { class: 'sheet-head' }, h('h2', {}, title),
-      h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: close }, '✕'));
 
     if (imp.step === 'file' || imp.step === 'reading') {
       const input = h('input', { type: 'file', accept: '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'arch-file',
         onchange: () => { if (input.files?.[0]) readFile(input.files[0]); } });
-      dlg.replaceChildren(h('div', { class: 'sheet-body' },
-        head('Import history from Excel'),
+      dlg.replaceChildren(...win(dlg, 'Import history from Excel', null, '',
         h('p', { class: 'small' }, 'Choose your Budget spreadsheet (.xlsx). Every year sheet in it is read on this device — nothing is uploaded while it’s read.'),
         h('ul', { class: 'small arch-points' },
           h('li', {}, 'You’ll confirm the bank for each group of Credit / Debit / Balance columns.'),
@@ -207,8 +218,7 @@ export function createArchiveUI(ctx) {
               isGenericLabel(g.label) ? h('span', { class: 'small warn-text' }, 'This label doesn’t say which bank — check it’s right for this year.') : null);
           })) : null);
       });
-      dlg.replaceChildren(h('div', { class: 'sheet-body' },
-        head('Name the accounts'),
+      dlg.replaceChildren(...win(dlg, 'Name the accounts', null, '',
         h('p', { class: 'small' }, `${imp.fileName}: name each group of columns. The same name in different years is treated as one account, so searches follow it across years. Clear a name to leave those columns out.`),
         list,
         sheetBlocks,
@@ -228,8 +238,7 @@ export function createArchiveUI(ctx) {
         ? h('section', { class: 'arch-check' }, h('h4', {}, `Sheet “${b.s.parsed.sheet}”`), h('p', { class: 'warn small' }, b.error))
         : checkBlock(b));
       const doImport = () => doImportYears(good.map((b) => b.year), imp.sheets);
-      dlg.replaceChildren(h('div', { class: 'sheet-body' },
-        head('Check before importing'),
+      dlg.replaceChildren(...win(dlg, 'Check before importing', null, '',
         h('p', { class: 'small' }, good.length
           ? `${plural(good.length, 'year')} ready: ${yearsText(good.map((b) => b.year))}, ${plural(good.reduce((n, b) => n + b.year.rows.length, 0), 'row')}.`
           : 'Nothing can be imported yet — see below.'),
@@ -353,11 +362,7 @@ export function createArchiveUI(ctx) {
         onclick: () => { view.order = v; for (const b of order.children) b.setAttribute('aria-checked', String(b.textContent === label)); drawResults(); },
       }, label)));
     const results = h('div', { class: 'arch-results' });
-    dlg.replaceChildren(h('div', { class: 'sheet-body arch-body' },
-      h('header', { class: 'sheet-head' },
-        h('h2', {}, 'History'),
-        h('span', { class: 'muted small arch-ro' }, 'read only'),
-        h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
+    dlg.replaceChildren(...win(dlg, 'History', h('span', { class: 'muted small arch-ro' }, 'read only'), 'arch-body',
       h('div', { class: 'arch-tools' }, search, yearSel, order),
       chips,
       h('p', { class: 'muted small arch-summary', id: 'archSummary' }),
