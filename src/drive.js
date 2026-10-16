@@ -150,6 +150,16 @@ export const googleDrive = {
     if (!resp.ok && resp.status !== 404) throw await failed(resp, 'backup delete');
   },
 
+  /** v0.14.8: moves one of the app's own files to Drive's bin (recoverable there for 30 days). */
+  async trashFile(token, id) {
+    const resp = await call(token, `${API}/files/${id}?fields=id`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trashed: true }),
+    });
+    if (!resp.ok && resp.status !== 404) throw await failed(resp, 'move to bin');
+  },
+
   /** Signed-in account's email (used only to skip the account picker next time). */
   async whoAmI(token) {
     const resp = await call(token, `${API}/about?fields=user(emailAddress)`);

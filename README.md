@@ -4,7 +4,33 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.14.6 — fixes: ring-fenced money back went stale once confirmed; grid put a transfer out ahead of the day's money in (v0.14.3: recurring items list showed £0.00; v0.14.0: joint account file, limits, phone Summary)
+## Status: v0.14.8 — history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.14.8: history from Budget.xlsx** (⚙ → History from Excel)
+- **Import:** choose the workbook; every year sheet is read on the device by a
+  small built-in .xlsx reader (`src/lib/xlsx-read.js`, no library; it reads the
+  values Excel saved, so formulas aren't run). Each Credit/Debit/Balance group
+  gets a name, suggested from the labels above it. A generic label ("Current
+  Account") is flagged on every sheet, because the bank can differ by year.
+  Same name = same archive account across years. Names are remembered.
+- **Check page, then import as it is:** dates out of order (only the stray row,
+  with the dates either side), balances that don't follow from the row above,
+  Brought forward ≠ last year's close, rows with no date. Nothing is changed:
+  fix the spreadsheet and import again (that year is replaced). Rows from the
+  first day of the app's own records (1 Oct 2026) are left out.
+- **Viewer:** desktop = the spreadsheet grid (blank balance cells show the
+  balance above, faded; month lines only between in-order rows; ⚠ date on a
+  stray row with an explanation). Phone = a list. **Search** covers every year
+  (all words must match) with a total row per year and a grand total; account
+  chips filter; Sheet order / Date order (date order hides balances).
+- **Storage:** IndexedDB record `archive` (encrypted with the lock), never in
+  the ledger, `personal.json`, the merge or backups. With sync on, also
+  `My Drive/Finance/Archive/archive-YYYY.json` so the other device can **Get
+  from Drive**. **Delete imported history…** removes this device's copy and
+  moves the Drive files to Drive's bin (30 days to recover). The other device
+  keeps its copy until it's deleted there. Erase all data removes it too.
+- Tests: `archive-tests.mjs` (33, incl. a real .xlsx fixture with made-up
+  figures), e2e `archive_v0148.py` (57 checks).
 
 **v0.14.6:**
 - **Ring-fenced money back stays up to date after you confirm it.** It used to

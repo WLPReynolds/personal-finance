@@ -77,6 +77,7 @@ export function createFakeDrive() {
       return { id: nid };
     },
     async deleteFile(token, id) { check(); items.delete(id); this.calls.push('delete'); },
+    async trashFile(token, id) { check(); const f = items.get(id); if (f) f.trashed = true; this.calls.push('trash'); },
     async whoAmI() { check(); return 'wayne@example.com'; },
     // test helpers
     fileText() { for (const f of items.values()) if (!f.folder && !f.trashed && f.name === 'personal.json') return f.text; return null; },

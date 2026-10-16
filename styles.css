@@ -104,7 +104,7 @@ button, input, select { font: inherit; color: inherit; }
 .field > span:first-child { font-size: 13px; color: var(--muted); font-weight: 500; }
 .field-row { grid-template-columns: 1fr 130px; align-items: center; }
 .field-pair, .env-move-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-input[type="text"], input[type="date"], input[type="number"], input[type="password"], select {
+input[type="text"], input[type="date"], input[type="number"], input[type="password"], input[type="search"], select {
   width: 100%; min-height: 44px; padding: 8px 10px; border-radius: 10px;
   border: 1px solid var(--line-strong); background: var(--surface);
 }
@@ -786,3 +786,75 @@ li.env-hist-row { cursor: default; }
   letter-spacing: 0.02em;
 }
 
+
+/* ---- v0.14.8 history imported from Excel (read only) */
+dialog.sheet-wide { height: 94dvh; max-height: 94dvh; }
+@media (min-width: 640px) {
+  dialog.sheet-wide { width: min(1400px, 96vw); }
+}
+.arch-body { min-height: 100%; align-content: start; }
+.arch-ro { border: 1px solid var(--line-strong); border-radius: 999px; padding: 1px 8px; }
+.arch-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.arch-tools .arch-search { flex: 1 1 240px; min-width: 0; }
+.arch-tools .arch-year { flex: 0 0 auto; width: auto; }
+.arch-order { flex: 0 0 auto; }
+.arch-order .seg-btn { white-space: nowrap; }
+#archiveDialog .sheet-body > p, #archiveImportDialog .sheet-body > p:not(.warn) { margin: 0; }
+.arch-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.arch-chip {
+  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); background: var(--surface);
+  border-radius: 999px; padding: 5px 10px; min-height: 34px; font-size: 13px; cursor: pointer;
+}
+.arch-chip[aria-pressed="true"] { background: color-mix(in srgb, var(--acc) 16%, var(--surface)); border-color: var(--acc); font-weight: 600; }
+.arch-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--acc, var(--muted)); flex: none; display: inline-block; }
+.arch-chip .arch-dot { background: var(--acc); }
+.arch-summary { margin: 0; min-height: 18px; }
+.arch-wrap { max-height: calc(94dvh - 210px); }
+.arch-grid { --head1: 40px; }
+.arch-acc-head { height: 40px; vertical-align: top !important; padding: 0 8px 4px !important; border-right: 1px solid var(--line-strong); min-width: 220px; }
+.arch-acc-name { font-weight: 700; font-size: 14px; }
+.grid tbody tr.arch-ooo td.c-date { color: var(--warn-text); background: var(--warn-bg); font-weight: 700; cursor: help; }
+.grid tbody tr.arch-year-row td { background: var(--surface-2); font-weight: 700; border-top: 2px solid color-mix(in srgb, var(--text) 40%, transparent); }
+.grid tbody tr.arch-total td { font-weight: 700; background: var(--surface-2); border-top: 1px solid var(--line-strong); }
+.grid tbody tr.arch-grand td { background: color-mix(in srgb, var(--primary) 12%, var(--surface)); border-top: 2px solid var(--primary); }
+.grid td.credit { color: var(--credit); }
+/* phone list */
+.arch-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.arch-list .day { padding: 10px 2px 2px; }
+.arch-item { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: grid; gap: 3px; }
+.arch-item-top { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.arch-date { font-size: 12px; color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+.arch-ooo-date {
+  flex: none; font-size: 12px; font-weight: 700; color: var(--warn-text); background: var(--warn-bg);
+  border: 1px solid color-mix(in srgb, var(--warn-text) 40%, transparent); border-radius: 6px; padding: 1px 6px; cursor: pointer;
+}
+.arch-desc { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.arch-note .arch-desc { font-style: italic; color: var(--muted); }
+.arch-bf { background: var(--surface); }
+.arch-bf .arch-desc { font-weight: 700; }
+.arch-line { display: flex; gap: 6px; align-items: center; font-size: 13px; padding-left: 2px; }
+.arch-line-name { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch-line-amt { font-weight: 600; font-variant-numeric: tabular-nums; }
+.arch-line-amt.credit { color: var(--credit); }
+.arch-line-bal { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; }
+.arch-total { background: var(--surface); border-color: var(--line-strong); }
+.arch-grand { background: color-mix(in srgb, var(--primary) 12%, var(--surface)); border-color: var(--primary); }
+.arch-list-year { color: var(--text); }
+/* import */
+.arch-points { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.arch-pick { position: relative; overflow: hidden; justify-self: start; cursor: pointer; display: inline-flex; align-items: center; }
+.arch-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.arch-sheet { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: grid; gap: 10px; }
+.arch-sheet.excluded { opacity: 0.7; }
+.arch-sheet-head { flex-wrap: wrap; }
+.arch-groups { display: grid; gap: 10px; }
+.arch-group { padding-left: 28px; }
+.warn-text { color: var(--warn-text); }
+.ok-text { color: var(--credit); font-weight: 600; margin: 0; }
+.arch-check { border-top: 1px solid var(--line); padding-top: 10px; }
+.arch-check h4 { margin: 0 0 4px; font-size: 15px; }
+.arch-details summary { cursor: pointer; font-weight: 600; color: var(--warn-text); }
+.arch-kind { margin: 8px 0 2px; font-weight: 600; }
+.arch-issues { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.arch-rowref { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; }
+.toast-warn { background: var(--warn-bg); color: var(--warn-text); }
