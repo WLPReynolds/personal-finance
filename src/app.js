@@ -58,7 +58,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.6';
+export const APP_VERSION = '0.14.7';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
