@@ -457,6 +457,8 @@ export function matches(text, query) {
 function addTotals(totals, row, keys) {
   for (const [k, v] of Object.entries(row.v)) {
     if (keys && !keys.has(k)) continue;
+    // v0.15.1: a row carries every account's balance; only an amount makes the account part of the results
+    if (v[0] === null && v[1] === null) continue;
     const t = (totals[k] ??= { credit: 0, debit: 0 });
     t.credit += v[0] ?? 0;
     t.debit += v[1] ?? 0;

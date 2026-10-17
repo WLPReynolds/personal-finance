@@ -270,6 +270,11 @@ test('search across all years: rows per year, a total per year and a grand total
   assert.deepEqual(r.totals.barclaycard, { credit: 200, debit: 1489 });
   assert.equal(searchArchive(sampleArchive(), { query: 'brought' }).count, 0);
 });
+test('search results only include accounts with an amount on a matching row (not those with just a balance)', () => {
+  const r = searchArchive(sampleArchive(), { query: 'salary' });
+  assert.deepEqual(Object.keys(r.totals), ['chasecurrentaccount']);
+  assert.deepEqual(r.years.flatMap((y) => Object.keys(y.totals)), ['chasecurrentaccount']);
+});
 test('search filtered to one account: only rows with an amount there, totals for it only', () => {
   const r = searchArchive(sampleArchive(), { query: 'car parking', accountKeys: new Set(['chasecurrentaccount']) });
   assert.equal(r.count, 1);

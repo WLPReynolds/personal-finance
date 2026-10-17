@@ -4,7 +4,11 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.15.1:** History search results showed a column for every account, because each
+spreadsheet row carries every account's balance. Now only accounts with an amount on a
+matching row get a column (`addTotals` in `lib/archive.js` skips balance-only cells).
 
 **v0.15.0: Find** (design: Project doc `claude/finder-design.md`)
 - **Find…** on the grid's toolbar and the phone's Summary opens a window (✕ only)
