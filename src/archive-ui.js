@@ -13,6 +13,32 @@ import {
 import { uploadArchiveYears, downloadArchiveYears, trashArchiveYears } from './lib/archive-drive.js';
 import { loadArchive, saveArchive, removeArchive } from './store.js';
 import { formatPence } from './lib/money.js';
+import { suggestLink } from './lib/finder.js';
+
+/**
+ * v0.14.9: a "window" dialog — a title bar that never scrolls away, with the ✕
+ * always at its right — that closes ONLY from the ✕ (not a tap outside, not
+ * Escape: Wayne, 16 Oct). → [title bar, body]. Shared with the Finder (v0.15).
+ */
+export function windowFrame(h, dlg, title, extra, bodyClass, ...children) {
+  return [
+    h('header', { class: 'win-bar' },
+      h('h2', { class: 'win-title' }, title),
+      extra,
+      h('button', { type: 'button', class: 'win-close', 'aria-label': 'Close', title: 'Close', onclick: () => dlg.close() }, '✕')),
+    h('div', { class: `sheet-body win-body ${bodyClass}` }, ...children),
+  ];
+}
+
+/** v0.15: scroll an element into the middle of its scroller and flash it. */
+export function flashInto(el) {
+  if (!el) return;
+  el.scrollIntoView({ block: 'center', inline: 'nearest' });
+  el.classList.remove('flash');
+  void el.offsetWidth; // restart the animation
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 2600);
+}
 
 /**
  * ctx: { h, $, toast, openDialog, isOpen, sync, drive, firstLiveDate(), renderSettings(), isWide() }
@@ -59,7 +85,9 @@ export function createArchiveUI(ctx) {
         ys.length ? h('button', { type: 'button', class: 'btn-primary', onclick: openViewer }, 'Open history') : null,
         h('button', { type: 'button', class: ys.length ? 'btn-secondary' : 'btn-primary', onclick: openImport }, ys.length ? 'Import again…' : 'Import from Excel…'),
         syncing ? h('button', { type: 'button', class: 'btn-secondary', onclick: fetchFromDrive }, ys.length ? 'Update from Drive' : 'Get from Drive') : null),
-      ys.length ? h('button', { type: 'button', class: 'btn-danger btn-small', onclick: deleteAll }, 'Delete imported history…') : null,
+      ys.length ? h('div', { class: 'btn-row' },
+        h('button', { type: 'button', class: 'btn-secondary btn-small', onclick: openLinks }, 'Link to your accounts…'),
+        h('button', { type: 'button', class: 'btn-danger btn-small', onclick: deleteAll }, 'Delete imported history…')) : null,
       syncing ? h('p', { class: 'muted small' }, 'Imports are saved to My Drive/Finance/Archive too, one file per year, so your other device can get them.') : null);
   }
 
@@ -109,19 +137,61 @@ export function createArchiveUI(ctx) {
     })();
   }
 
+  const win = (dlg, title, extra, bodyClass, ...children) => windowFrame(h, dlg, title, extra, bodyClass, ...children);
+
+  // ---------------------------------------------------------------- v0.15 links to live accounts
+
   /**
-   * v0.14.9: these two dialogs look like a window — a title bar that never
-   * scrolls away, with the ✕ always at its right — and close ONLY from the ✕
-   * (not a tap outside, not Escape: Wayne, 16 Oct). → [title bar, body]
+   * One row per history account (by name, across years): "Same as: <live account>".
+   * A first-time account with exactly the same name as a live one is suggested.
+   * → { el, value(): { key: accountId | '' } }
    */
-  function win(dlg, title, extra, bodyClass, ...children) {
-    return [
-      h('header', { class: 'win-bar' },
-        h('h2', { class: 'win-title' }, title),
-        extra,
-        h('button', { type: 'button', class: 'win-close', 'aria-label': 'Close', title: 'Close', onclick: () => dlg.close() }, '✕')),
-      h('div', { class: `sheet-body win-body ${bodyClass}` }, ...children),
-    ];
+  function linksEditor(histAccounts) {
+    const live = ctx.liveAccounts();
+    const decided = ctx.linkDecisions();
+    const sels = new Map();
+    const rows = histAccounts.map((a) => {
+      const has = Object.prototype.hasOwnProperty.call(decided, a.key);
+      const current = has ? (decided[a.key] ?? '') : (suggestLink(a.name, live) ?? '');
+      const suggested = !has && current;
+      const sel = h('select', { 'aria-label': `Link ${a.name}`, class: 'arch-link-sel' },
+        h('option', { value: '' }, 'Not linked — its own column'),
+        live.map((l) => h('option', { value: l.id, selected: l.id === current }, `Same as: ${l.name}`)));
+      sels.set(a.key, sel);
+      return h('div', { class: 'arch-link-row' },
+        h('span', { class: 'arch-link-name' }, h('span', { class: 'arch-dot', style: { '--acc': a.colour } }), a.name,
+          a.firstYear ? h('span', { class: 'muted small' }, ` · ${a.firstYear === a.lastYear ? a.firstYear : `${a.firstYear}–${a.lastYear}`}`) : null,
+          suggested ? h('span', { class: 'small arch-suggest' }, ' · suggested') : null),
+        sel);
+    });
+    return {
+      el: h('div', { class: 'arch-links' }, rows),
+      value: () => Object.fromEntries([...sels].map(([k, sel]) => [k, sel.value])),
+    };
+  }
+
+  /** ⚙ → Link to your accounts… (no re-import needed). */
+  async function openLinks() {
+    await ensureLoaded();
+    if (!hasArchive()) return;
+    const dlg = $('archiveImportDialog');
+    const ed = linksEditor(archiveAccounts(archive));
+    const save = async () => {
+      try {
+        await ctx.saveLinks(ed.value());
+        dlg.close();
+        toast('Links saved');
+      } catch (err) {
+        toast(err?.message ?? String(err), 'error');
+      }
+    };
+    dlg.replaceChildren(...win(dlg, 'Link history to your accounts', null, '',
+      h('p', { class: 'small' }, 'In Find, a history account linked to one of your accounts shows in that account’s column — so a 2024 Nationwide spend sits with this year’s. Several can link to one (e.g. balance-transfer columns to the card). Unlinked ones get a column of their own.'),
+      ed.el,
+      h('div', { class: 'sheet-actions' },
+        h('button', { type: 'button', class: 'btn-secondary', onclick: () => dlg.close() }, 'Cancel'),
+        h('button', { type: 'button', class: 'btn-primary', onclick: save }, 'Save links'))));
+    openDialog(dlg);
   }
 
   // ---------------------------------------------------------------- import
@@ -237,7 +307,10 @@ export function createArchiveUI(ctx) {
       const blocks = built.map((b) => b.error
         ? h('section', { class: 'arch-check' }, h('h4', {}, `Sheet “${b.s.parsed.sheet}”`), h('p', { class: 'warn small' }, b.error))
         : checkBlock(b));
-      const doImport = () => doImportYears(good.map((b) => b.year), imp.sheets);
+      // v0.15: link the history accounts to live ones (each name once, across the years)
+      const histAccounts = archiveAccounts(withYears(archive ?? emptyArchive(), good.map((b) => b.year)));
+      const ed = histAccounts.length && ctx.liveAccounts().length ? linksEditor(histAccounts) : null;
+      const doImport = () => doImportYears(good.map((b) => b.year), imp.sheets, ed?.value() ?? null);
       dlg.replaceChildren(...win(dlg, 'Check before importing', null, '',
         h('p', { class: 'small' }, good.length
           ? `${plural(good.length, 'year')} ready: ${yearsText(good.map((b) => b.year))}, ${plural(good.reduce((n, b) => n + b.year.rows.length, 0), 'row')}.`
@@ -246,6 +319,10 @@ export function createArchiveUI(ctx) {
         replacing.length ? h('p', { class: 'small warn' }, `Already imported: ${replacing.join(', ')}. Importing replaces ${replacing.length === 1 ? 'it' : 'them'}.`) : null,
         h('p', { class: 'muted small' }, 'Anything listed below is imported exactly as it is. To correct it, fix the spreadsheet and import again — that year is replaced.'),
         blocks,
+        ed ? h('section', { class: 'arch-check' },
+          h('h4', {}, 'Link to your accounts'),
+          h('p', { class: 'muted small' }, 'Used by Find: a linked history account shows in your account’s column. You can change these later in ⚙.'),
+          ed.el) : null,
         h('div', { class: 'sheet-actions' },
           h('button', { type: 'button', class: 'btn-secondary', onclick: () => { imp.step = 'names'; renderImport(); } }, 'Back'),
           h('button', { type: 'button', class: 'btn-primary', disabled: !good.length, onclick: doImport }, good.length ? `Import ${plural(good.length, 'year')}` : 'Import'))));
@@ -282,7 +359,7 @@ export function createArchiveUI(ctx) {
       n ? details : h('p', { class: 'small ok-text' }, '✓ No problems found'));
   }
 
-  function doImportYears(years, sheets) {
+  function doImportYears(years, sheets, links = null) {
     // start Google's sign-in (if needed) from this tap, before anything is awaited
     const syncing = sync.isEnabled();
     const upload = syncing ? sync.withSyncToken((token) => uploadArchiveYears(drive, token, years), { interactive: true }) : null;
@@ -299,6 +376,9 @@ export function createArchiveUI(ctx) {
       } catch (err) {
         toast(`Couldn’t save the history on this device: ${err?.message ?? err}`, 'error');
         return;
+      }
+      if (links) {
+        try { await ctx.saveLinks(links); } catch (err) { toast(`History imported, but the links weren’t saved: ${err?.message ?? err}`, 'error'); }
       }
       $('archiveImportDialog').close();
       let note = '';
@@ -337,12 +417,14 @@ export function createArchiveUI(ctx) {
     if (!hasArchive()) { toast('No history imported yet'); return; }
     const ys = yearsOf(archive);
     if (opts.year && archive.years[opts.year]) view.year = opts.year;
+    if (opts.row) { view.query = ''; view.forced = null; view.accountKeys = new Set(); } // v0.15: from Find — show the whole year at that row
     if (!view.year || !archive.years[view.year]) view.year = ys[ys.length - 1].year;
     // a filter for an account that no longer exists is dropped
     const keys = new Set(archiveAccounts(archive).map((a) => a.key));
     view.accountKeys = new Set([...view.accountKeys].filter((k) => keys.has(k)));
     renderViewer();
     openDialog($('archiveDialog'));
+    if (opts.row) requestAnimationFrame(() => flashInto($('archiveDialog').querySelector(`[data-n="${opts.row}"]`)));
   }
 
   const searching = () => Boolean(activeQuery()) || view.accountKeys.size > 0;
@@ -465,7 +547,7 @@ export function createArchiveUI(ctx) {
         accounts.map(() => [h('td', {}), h('td', { class: balances ? '' : 'bal-col' }), balances ? h('td', { class: 'bal-col' }) : null])));
       for (const x of g.items) {
         const cls = [x.row.bf ? 'row-bf' : '', isNote(x.row) && !x.row.bf ? 'row-note' : '', x.monthStart && !totals ? 'month-start' : '', x.outOfOrder ? 'arch-ooo' : ''].filter(Boolean).join(' ');
-        body.append(h('tr', { class: cls },
+        body.append(h('tr', { class: cls, dataset: { n: String(x.row.n) } },
           h('td', { class: 'sticky-l c-date', title: x.outOfOrder ? oooTitle(x, g.yearObj) : null }, x.outOfOrder ? '⚠ ' : '', shortDate(x.row.d)),
           h('td', { class: 'sticky-l2 c-desc', title: x.row.t }, x.row.t),
           accounts.map((a) => {
@@ -527,7 +609,7 @@ export function createArchiveUI(ctx) {
         const dateBtn = x.outOfOrder
           ? h('button', { type: 'button', class: 'arch-ooo-date', onclick: () => toast(oooTitle(x, g.yearObj), 'warn') }, `⚠ ${shortDate(x.row.d)}`)
           : h('span', { class: 'arch-date' }, shortDate(x.row.d));
-        ul.append(h('li', { class: `arch-item ${x.row.bf ? 'arch-bf' : ''} ${isNote(x.row) && !x.row.bf ? 'arch-note' : ''} ${x.outOfOrder ? 'arch-ooo' : ''}` },
+        ul.append(h('li', { dataset: { n: String(x.row.n) }, class: `arch-item ${x.row.bf ? 'arch-bf' : ''} ${isNote(x.row) && !x.row.bf ? 'arch-note' : ''} ${x.outOfOrder ? 'arch-ooo' : ''}` },
           h('div', { class: 'arch-item-top' }, dateBtn, h('span', { class: 'arch-desc' }, x.row.t || '(no description)')),
           lines));
       }
@@ -557,5 +639,5 @@ export function createArchiveUI(ctx) {
     loaded = true;
   }
 
-  return { settingsSection, openViewer, openImport, eraseLocal, redraw: () => { if (isOpen('archiveDialog') && hasArchive()) drawResults(); } };
+  return { settingsSection, openViewer, openImport, openLinks, eraseLocal, getArchive: ensureLoaded, redraw: () => { if (isOpen('archiveDialog') && hasArchive()) drawResults(); } };
 }
