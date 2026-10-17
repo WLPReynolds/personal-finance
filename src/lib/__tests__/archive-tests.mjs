@@ -75,6 +75,7 @@ test('suggested names: known banks get their proper name, the rest title case', 
   assert.equal(suggestName('BARCLAYCARD'), 'Barclaycard');
   assert.equal(suggestName('MONZO FLEX'), 'Monzo Flex');
   assert.equal(suggestName('HALIFAX ISA'), 'Halifax Isa');
+  assert.equal(suggestName('BARCLAYCARD BT'), 'Barclaycard Bt'); // not "Barclaycard": it'd clash with the card's own column
   assert.equal(suggestName('Current Account'), 'Current Account');
   assert.equal(institutionFor('Chase current account'), 'chase');
 });

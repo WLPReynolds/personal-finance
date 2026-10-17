@@ -4,7 +4,30 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.14.10 — history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.15.0: Find** (design: Project doc `claude/finder-design.md`)
+- **Find…** on the grid's toolbar and the phone's Summary opens a window (✕ only)
+  that searches imported history, live entries and projections up to the grid's
+  horizon (joint included when on). Same search rules as History (3 letters /
+  Enter / ✕ clears; account chips). Desktop: Date · Description · one column per
+  account (no balances); phone: a list. Totals per year + grand total, out and in
+  apart. History rows carry a small history icon.
+- **Links:** each history account (by name) can be "Same as" a live account —
+  on the import's check page (exact-name suggestion) or ⚙ → History from Excel →
+  **Link to your accounts…**. Stored as one `scheduledItems` record
+  (`recordType: 'archiveLinks'`, id `archive-links`, `links: { key: accountId|null }`,
+  null = decided "not linked"), so it syncs; personal file only. Older versions ignore it.
+- **Internal moves:** same day, same amount, out + in from two different history
+  accounts linked to the same live account → tagged, struck through, not counted.
+- **Click a row:** live → Find closes and the grid row (phone: that account's
+  entry) scrolls to the middle and flashes (`data-row-id` on grid rows and list
+  entries); history → the History window at that row (`data-n`), on top of Find.
+- Name suggestion fix: a label is only renamed to a bank's proper name when it IS
+  that name ("BARCLAYCARD BT" stays "Barclaycard Bt", or it clashed with the card).
+- Code: `src/lib/finder.js` (pure), `src/finder-ui.js`; `windowFrame`/`flashInto`
+  shared from `src/archive-ui.js`. Tests: `finder-tests.mjs` (11), e2e
+  `finder_v0150.py` (33).
 
 **v0.14.10:** history search starts at 3 letters (a hint shows until then), or
 straight away with **Enter** for something shorter ("BP"). A ✕ inside the

@@ -882,3 +882,34 @@ dialog.sheet-wide { height: 94dvh; }
 .arch-issues { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
 .arch-rowref { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; }
 .toast-warn { background: var(--warn-bg); color: var(--warn-text); }
+
+/* ---- v0.15.0 Find (history + live in one search) */
+.grid-tools { display: flex; align-items: center; gap: 10px; }
+.grid-tools .grid-hint { flex: 1; min-width: 0; }
+.find-btn { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.summary-tools { padding: 10px 12px 0; }
+.find-btn.find-wide { width: 100%; justify-content: center; min-height: 44px; font-size: 15px; }
+.fd-grid th.fd-col { min-width: 130px; vertical-align: top; padding-top: 0; }
+.fd-grid th.fd-col .acc-bar { margin: 0 -8px 6px; }
+.fd-col-name { font-weight: 700; font-size: 13px; text-align: right; display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
+.fd-grid thead tr th { top: 0 !important; }
+.fd-row { cursor: pointer; }
+.fd-row td.c-desc { overflow: hidden; text-overflow: ellipsis; }
+.fd-amt { display: block; }
+.fd-amt.fd-int, .fd-int { color: var(--muted) !important; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+.fd-hist { display: inline-flex; vertical-align: -1px; margin-right: 4px; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+.fd-tag { margin-left: 8px; font-size: 11px; color: var(--muted); font-style: normal; white-space: nowrap; }
+.fd-tag-int { border: 1px solid var(--line-strong); border-radius: 999px; padding: 0 6px; }
+.fd-tags { display: flex; gap: 4px; }
+.fd-tags .fd-tag { margin-left: 0; }
+.fd-item { width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.fd-projected { font-style: italic; opacity: 0.8; }
+.arch-line-amt .fd-amt { display: inline; margin-left: 6px; }
+/* flash where Find jumped to (grid row, phone entry, history row) */
+@keyframes ft-flash { 0%, 30% { background: color-mix(in srgb, var(--primary) 30%, var(--surface)); } 100% { background: inherit; } }
+.flash, .flash > td, .grid tbody tr.flash td { animation: ft-flash 2.4s ease-out; }
+.arch-links { display: grid; gap: 8px; }
+.arch-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 10px; align-items: center; }
+.arch-link-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 500; }
+.arch-suggest { color: var(--credit); font-weight: 600; }
+@media (max-width: 480px) { .arch-link-row { grid-template-columns: 1fr; gap: 4px; } }

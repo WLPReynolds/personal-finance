@@ -101,8 +101,10 @@ export function institutionFor(name) {
 
 /** A first guess at the name, from the header label. */
 export function suggestName(label) {
+  // v0.15: only when the label IS the bank's name — "BARCLAYCARD BT" must stay its own name,
+  // or two columns on one sheet (a card and its balance-transfer column) would clash
   const inst = institutionFor(label);
-  if (inst) return INSTITUTIONS[inst].label;
+  if (inst && squash(INSTITUTIONS[inst].label) === squash(label)) return INSTITUTIONS[inst].label;
   return titleCase(label) || 'Account';
 }
 

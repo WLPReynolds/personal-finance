@@ -17,7 +17,9 @@ import { googleAuth } from './google-auth.js';
 import { googleDrive } from './drive.js';
 import { createSyncEngine } from './lib/sync-engine.js';
 import { shareTokenRequests } from './lib/shared-auth.js';
-import { createArchiveUI } from './archive-ui.js';
+import { createArchiveUI, flashInto } from './archive-ui.js';
+import { createFinderUI } from './finder-ui.js';
+import { archiveLinks, linkDecisions, setArchiveLinks } from './lib/finder.js';
 import {
   JOINT_FOLDER_NAME, JOINT_FILE_NAME, emptyJointLedger, isJointLedger, addJointAccount, combineLedgers, splitLedger,
 } from './lib/joint.js';
@@ -59,7 +61,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.14.10';
+export const APP_VERSION = '0.15.0';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -491,7 +493,58 @@ const archiveUI = createArchiveUI({
   firstLiveDate: () => (state.personal?.accounts ?? []).map((a) => a.openingDate).filter(Boolean).sort()[0] ?? null,
   renderSettings: () => renderSettings(),
   isWide: () => desktopQuery.matches,
+  // v0.15: linking history accounts to your own accounts (not the joint one) — a synced settings record
+  liveAccounts: () => (state.personal?.accounts ?? []).map((a) => ({ id: a.id, name: a.name })),
+  linkDecisions: () => linkDecisions(state.personal),
+  saveLinks: (links) => commit(setArchiveLinks(state.ledger, links)),
 });
+
+// ---- v0.15.0: Find — history + live accounts in one search (src/finder-ui.js)
+const finderUI = createFinderUI({
+  h, $, toast, openDialog, isOpen,
+  isWide: () => desktopQuery.matches,
+  liveGridRows: () => {
+    const view = viewLedger();
+    // envelope moves carry no money: nothing to find
+    return buildGridRows({ ...view, transactions: view.transactions.filter((t) => !isEnvelopeMove(t)) }, state.ledger.accounts);
+  },
+  liveColumns: () => state.ledger.accounts.map((a) => ({ id: a.id, name: a.name, colour: institutionStyle(a.institution).colour })),
+  getArchive: () => archiveUI.getArchive(),
+  links: () => archiveLinks(state.personal),
+  goLive: (x) => goToLiveRow(x),
+  goHistory: (year, n) => archiveUI.openViewer({ year, row: n }),
+});
+
+/**
+ * Finder → the row in the grid (desktop) or in that account's list (phone),
+ * scrolled to the middle and flashed.
+ */
+function goToLiveRow(x) {
+  const shown = new Set(visibleAccounts().map((a) => a.id));
+  const accountId = x.ref.accountIds.find((id) => shown.has(id));
+  if (!accountId) {
+    toast('That entry is on a hidden account — show the account in ⚙ to see it', 'warn');
+    return;
+  }
+  // the entry may be further ahead than the months shown (a projection is never beyond them)
+  if (!isGrid()) {
+    state.summary = false;
+    state.activeAccountId = accountId;
+  }
+  state.listScrollToToday = false;
+  render();
+  requestAnimationFrame(() => {
+    const el = app.querySelector(`[data-row-id="${CSS.escape(x.ref.rowId)}"]`);
+    if (el) flashInto(el);
+    else toast('Couldn’t find that entry on screen', 'warn');
+  });
+}
+
+/** v0.15: the Find button (grid toolbar and the phone's Summary). */
+function findButton(cls = '') {
+  return h('button', { type: 'button', class: `btn-secondary btn-small find-btn ${cls}`, onclick: () => finderUI.open() },
+    h('span', { 'aria-hidden': 'true' }, '⌕ '), 'Find…');
+}
 
 // ---- v0.14 joint account: its own engine on its own file. Created only
 // while the switch is on; with it off, none of this runs.
@@ -1028,6 +1081,7 @@ function renderSummary(accounts) {
   const today = todayIso();
   const wrap = h('div', { class: 'list-view summary-view' },
     accountTabs(accounts),
+    h('div', { class: 'summary-tools' }, findButton('find-wide')),
     h('div', { class: 'summary' }, accounts.map((a) => bannerCard(a, view, today, { summary: true }))));
   addSwipe(wrap, accounts);
   app.replaceChildren(wrap);
@@ -1177,6 +1231,7 @@ function renderList(accounts) {
     feed.append(h('li', { dataset: { month: tMonth } },
       h('button', {
         type: 'button',
+        dataset: { rowId: t.transferId ? `tr:${t.transferId}` : `tx:${t.id}` }, // v0.15: Find jumps here
         class: `entry ${t.kind === 'note' ? 'entry-note' : ''} ${t.date > today ? 'future' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''} ${!p?.skipped && t.kind !== 'note' && limitClass(active, runningBalance) ? 'lim-row' : ''}`,
         onclick: () => (p ? openProjection(p) : openTxDialog({ txId: t.id })),
       },
@@ -1341,7 +1396,7 @@ function renderGrid(accounts) {
     const env = rowEnvTag(row);
     const tr = h('tr', {
       class: `${monthStart} ${row.kind === 'note' ? 'row-note' : ''} ${future ? 'future' : ''} ${row.date === today ? 'is-today' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''}`,
-      dataset: { date: row.date },
+      dataset: { date: row.date, rowId: row.id }, // v0.15: Find jumps here
     },
       h('td', { class: 'sticky-l c-date clickable', onclick: openRow }, shortDate(row.date)),
       h('td', { class: 'sticky-l2 c-desc clickable', title: `${row.description}${row.seriesNo ? ` ${numberLabel(row.seriesNo)}` : ''}${p ? ` — ${tags.label}` : ''}`, onclick: openRow },
@@ -1372,7 +1427,8 @@ function renderGrid(accounts) {
   const wrap = h('div', { class: 'grid-wrap' }, table);
   app.replaceChildren(
     h('div', { class: 'grid-view' },
-      h('p', { class: 'grid-hint muted small' }, 'Click an empty Credit/Debit cell to add to that account on that date · click a value or description to edit · ⇄ = linked transfer · ↻ = recurring, click to confirm · ▤ = card statement, click to check it · ✓ = reconciled (✓ button in a header to reconcile)', envAccounts.length ? ' · envelope balances under a header: click for each envelope' : ''),
+      h('div', { class: 'grid-tools' }, findButton(),
+        h('p', { class: 'grid-hint muted small' }, 'Click an empty Credit/Debit cell to add to that account on that date · click a value or description to edit · ⇄ = linked transfer · ↻ = recurring, click to confirm · ▤ = card statement, click to check it · ✓ = reconciled (✓ button in a header to reconcile)', envAccounts.length ? ' · envelope balances under a header: click for each envelope' : '')),
       wrap));
 
   // The "month in view" line tracks whichever row sits just below the
@@ -3805,7 +3861,7 @@ $('importInput').addEventListener('change', (e) => {
   e.target.value = '';
   if (f) doImport(f);
 });
-desktopQuery.addEventListener('change', () => { if (state.viewMode === 'auto' && state.ledger) render(); archiveUI.redraw(); });
+desktopQuery.addEventListener('change', () => { if (state.viewMode === 'auto' && state.ledger) render(); archiveUI.redraw(); finderUI.redraw(); });
 
 // tap outside a dialog's content closes it — except the v0.14.9 "window"
 // dialogs (history), which close only from their ✕, never by accident
