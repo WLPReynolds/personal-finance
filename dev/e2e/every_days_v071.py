@@ -1,5 +1,5 @@
 """v0.7.1 — "Every so many days" frequency (e.g. a 90-day subscription).
-Editor fields, the 31-day minimum, preview, manager line, editing back, phone feed.
+Editor fields, the minimum (31 days, 7 since v0.15.3), preview, manager line, editing back, phone feed.
 Clock fixed at Tue 6 Oct 2026. Run: python3 dev/e2e/every_days_v071.py"""
 from common import *
 from playwright.sync_api import sync_playwright
@@ -40,14 +40,14 @@ try:
         pg.select_option(f'{D} .field-pair >> nth=1 >> select', value='d')
         check('days field shown, default 90', pg.is_visible(days) and pg.input_value(days) == '90')
         check('day-of-month field hidden', not pg.is_visible(f'{D} input[placeholder="1–31"]'))
-        check('min/max on the field', pg.get_attribute(days, 'min') == '31' and pg.get_attribute(days, 'max') == '366')
+        check('min/max on the field', pg.get_attribute(days, 'min') == '7' and pg.get_attribute(days, 'max') == '366')
         check('start hint explains first payment', 'first payment' in pg.text_content(D))
         pg.fill(f'{D} input[type=date] >> nth=0', '2026-10-15')
 
-        pg.fill(days, '30')
-        check('30 days: preview says 31 to 366', '31 to 366' in pg.text_content(f'{D} .rec-preview'))
+        pg.fill(days, '6')
+        check('6 days: preview says 7 to 366', '7 to 366' in pg.text_content(f'{D} .rec-preview'))
         pg.click(f'{D} button[type=submit]'); pg.wait_for_timeout(400)
-        check('30 days: not saved (dialog still open)', pg.is_visible(f'{D}[open]'))
+        check('6 days: not saved (dialog still open)', pg.is_visible(f'{D}[open]'))
         check('nothing added', pg.evaluate('() => document.querySelectorAll("#recurringDialog .rec-row").length') == 0)
 
         pg.fill(days, '90')

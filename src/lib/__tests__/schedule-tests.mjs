@@ -8,7 +8,7 @@ import {
 import {
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
   projections, withProjections, seriesDates, upcomingDates, horizonEnd, describeRule,
-  recurringItems, occurrenceExceptions, itemNumbering, numberLabel, nominalDate, seriesFinished,
+  recurringItems, occurrenceExceptions, itemNumbering, numberLabel, nominalDate, seriesFinished, isDateKeyed,
 } from '../schedule.js';
 import { emptyLedger, addAccount, addTransaction, deleteTransaction, updateTransaction, balanceAsOf, accountRunning } from '../ops.js';
 import { buildGridRows } from '../grid.js';
@@ -384,13 +384,12 @@ test('end date, weekend rule and upcoming dates work with every N days', () => {
   assert.deepEqual(dates(sub90('a', { shift: 'after' }), '2027-10-31').slice(-1), ['2027-10-11']); // Sun 10 Oct -> Mon
   assert.deepEqual(upcomingDates(sub90('a'), '2026-11-01', 2, HOL), ['2027-01-13', '2027-04-13']);
 });
-test('add / validate: minimum 31, maximum 366, whole days only', () => {
+test('add / validate: minimum 7 (v0.15.3), maximum 366, whole days only', () => {
   const s = setup();
-  for (const bad of [30, 7, 0, 367, 90.5]) {
-    assert.throws(() => addRecurring(s.ledger, sub90(s.current.id, { everyDays: bad })), /Repeat every 31 to 366 days/, String(bad));
+  for (const bad of [6, 0, 367, 90.5]) {
+    assert.throws(() => addRecurring(s.ledger, sub90(s.current.id, { everyDays: bad })), /Repeat every 7 to 366 days/, String(bad));
   }
-  const { item } = addRecurring(s.ledger, sub90(s.current.id, { everyDays: 31 }));
-  assert.equal(item.everyDays, 31);
+  for (const ok of [7, 14, 30, 31]) assert.equal(addRecurring(s.ledger, sub90(s.current.id, { everyDays: ok })).item.everyDays, ok);
 });
 test('stored item keeps an approximate months/day rule for older devices', () => {
   const s = setup();
@@ -437,6 +436,125 @@ test('items saved before v0.7.1 (no everyDays) are unchanged', () => {
   const old = { ...l1, scheduledItems: l1.scheduledItems.map(({ everyDays, ...r }) => r) };
   assert.deepEqual(projections(old, '2026-11-30', HOL).map((x) => x.date), ['2026-10-07', '2026-11-07']);
   assert.equal(recurringItems(updateRecurring(old, item.id, { amount: 700 }))[0].everyDays, null);
+});
+
+
+console.log('weekly and fortnightly (v0.15.3)');
+// Bin cleaning: fortnightly on Fridays from Fri 23 Oct 2026
+const bins = (accountId, extra = {}) => base(accountId, { description: 'Bin cleaning', amount: 800, everyDays: 14, startDate: '2026-10-23', ...extra });
+test('fortnightly: two or three a month, each with its own date as its period', () => {
+  const ds = seriesDates(bins('a'), '2027-01-31', HOL);
+  assert.deepEqual(ds.map((o) => o.date), ['2026-10-23', '2026-11-06', '2026-11-20', '2026-12-04', '2026-12-18', '2027-01-01', '2027-01-15', '2027-01-29']);
+  assert.deepEqual(ds.map((o) => o.period), ds.map((o) => o.nominal));
+});
+test('weekly: every 7 days, five in a five-Friday month', () => {
+  const ds = dates(bins('a', { everyDays: 7, startDate: '2027-01-01' }), '2027-01-31');
+  assert.deepEqual(ds, ['2027-01-01', '2027-01-08', '2027-01-15', '2027-01-22', '2027-01-29']);
+});
+test('isDateKeyed: under 31 days only, never a statement payment', () => {
+  assert.equal(isDateKeyed(bins('a')), true);
+  assert.equal(isDateKeyed(bins('a', { everyDays: 30 })), true);
+  assert.equal(isDateKeyed(bins('a', { everyDays: 31 })), false);
+  assert.equal(isDateKeyed(base('a')), false);
+});
+test('projections: each fortnightly entry is separate — confirming one leaves the rest of the month', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, bins(s.current.id));
+  assert.deepEqual(projections(l1, '2026-11-30', HOL).map((p) => p.period), ['2026-10-23', '2026-11-06', '2026-11-20']);
+  const l2 = confirmOccurrence(l1, item.id, '2026-11-06', { date: '2026-11-06', amount: 800 });
+  assert.ok(l2.transactions.some((t) => t.id === `sched:${item.id}:2026-11-06` && t.scheduledPeriod === '2026-11-06'));
+  assert.deepEqual(projections(l2, '2026-11-30', HOL).map((p) => p.period), ['2026-10-23', '2026-11-20']);
+  assert.throws(() => confirmOccurrence(l2, item.id, '2026-11-06', { date: '2026-11-06', amount: 800 }), /Already confirmed/);
+  // deleting the confirmed entry puts the projection back
+  const l3 = deleteTransaction(l2, `sched:${item.id}:2026-11-06`);
+  assert.deepEqual(projections(l3, '2026-11-30', HOL).map((p) => p.period), ['2026-10-23', '2026-11-06', '2026-11-20']);
+});
+test('skip and one-off change apply to that date only (the bin cleaning £8 / £4 case)', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, bins(s.current.id));
+  let l = setOccurrence(l1, item.id, '2026-11-06', { amount: 400 });
+  l = setOccurrence(l, item.id, '2026-11-20', { skipped: true });
+  const p = projections(l, '2026-12-31', HOL);
+  assert.deepEqual(p.map((x) => [x.period, x.amount, x.skipped, x.changed]), [
+    ['2026-10-23', 800, false, false], ['2026-11-06', 400, false, true], ['2026-11-20', 800, true, false],
+    ['2026-12-04', 800, false, false], ['2026-12-18', 800, false, false],
+  ]);
+  assert.ok(occurrenceExceptions(l).some((e) => e.id === `occ:${item.id}:2026-11-06`));
+});
+test('balances count every fortnightly payment, not one a month', () => {
+  const s = setup();
+  const { ledger } = addRecurring(s.ledger, bins(s.current.id));
+  const view = withProjections(ledger, '2026-11-30', HOL);
+  assert.equal(balanceAsOf(view, s.current, '2026-11-30'), 100000 - 3 * 800); // 23 Oct, 6 Nov, 20 Nov
+});
+test('weekend rule moves each date on its own; a shift into the next month stays in order', () => {
+  // Saturdays from 31 Oct 2026; next working day → Mondays
+  const ds = seriesDates(bins('a', { startDate: '2026-10-31', shift: 'after' }), '2026-12-02', HOL);
+  assert.deepEqual(ds.map((o) => [o.period, o.date]), [['2026-10-31', '2026-11-02'], ['2026-11-14', '2026-11-16'], ['2026-11-28', '2026-11-30']]);
+});
+test('end date, upcoming dates and numbering with fortnightly', () => {
+  const item = bins('a', { endDate: '2026-12-18', finalAmount: 400 });
+  assert.deepEqual(upcomingDates(item, '2026-11-07', 3, HOL), ['2026-11-20', '2026-12-04', '2026-12-18']);
+  assert.deepEqual(upcomingDates(item, '2026-12-19', 3, HOL), []);
+  const s = setup();
+  const { ledger: l1, item: it } = addRecurring(s.ledger, { ...item, accountId: s.current.id });
+  const p = projections(l1, '2027-01-31', HOL);
+  assert.deepEqual(p.map((x) => x.number), [1, 2, 3, 4, 5].map((n) => ({ n, of: 5 })));
+  assert.deepEqual(p.map((x) => x.amount), [800, 800, 800, 800, 400]);
+  // skip one: the rest close up and the last is still the final amount
+  const l2 = setOccurrence(l1, it.id, '2026-11-06', { skipped: true });
+  const n = itemNumbering(l2, it);
+  assert.deepEqual(n.get('2026-12-18'), { n: 4, of: 4 });
+  assert.equal(n.has('2026-11-06'), false);
+});
+test('nominalDate checks a fortnightly date is one of its own', () => {
+  assert.equal(nominalDate(bins('a'), '2026-11-06'), '2026-11-06');
+  assert.equal(nominalDate(bins('a'), '2026-11-07'), null);
+  assert.equal(nominalDate(bins('a'), '2026-11'), '2026-11-06'); // the first in the month
+});
+test('describeRule: "Weekly on …s" / "Fortnightly on …s"', () => {
+  assert.equal(describeRule(bins('a')), 'Fortnightly on Fridays, from 23 Oct 2026');
+  assert.equal(describeRule(bins('a', { everyDays: 7, shift: 'after' })), 'Weekly on Fridays, from 23 Oct 2026 · next working day');
+  assert.equal(describeRule(bins('a', { everyDays: 10 })), 'Every 10 days from 23 Oct 2026');
+});
+test('the ticket tracker amount can’t be used with a weekly / fortnightly repeat', () => {
+  const s = setup();
+  assert.throws(() => addRecurring(s.ledger, bins(s.current.id, { amountFrom: 'ticket-tracker' })), /ticket tracker’s figure is monthly/);
+  assert.equal(addRecurring(s.ledger, bins(s.current.id, { everyDays: 31, amountFrom: 'ticket-tracker' })).item.amountFrom, 'ticket-tracker');
+});
+test('items of 31 days or more are still keyed by month (nothing already confirmed moves)', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, sub90(s.current.id));
+  assert.deepEqual(projections(l1, '2027-01-31', HOL).map((p) => p.period), ['2026-10', '2027-01']);
+  const l2 = confirmOccurrence(l1, item.id, '2026-10', { date: '2026-10-15', amount: 599 });
+  assert.deepEqual(projections(l2, '2027-01-31', HOL).map((p) => p.period), ['2027-01']);
+});
+test('switching monthly → fortnightly: months already confirmed stay as they are', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, base(s.current.id, { day: 23, startDate: '2026-10-23' }));
+  let l = confirmOccurrence(l1, item.id, '2026-10', { date: '2026-10-23', amount: 599 });
+  l = updateRecurring(l, item.id, { everyDays: 14, startDate: '2026-11-06' });
+  assert.equal(l.transactions.filter((t) => t.scheduledItemId === item.id).length, 1);
+  assert.deepEqual(projections(l, '2026-11-30', HOL).map((p) => p.date), ['2026-11-06', '2026-11-20']);
+});
+test('a fortnightly item survives export / import; two devices confirming different dates merge cleanly', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, bins(s.current.id));
+  const a = confirmOccurrence(l1, item.id, '2026-11-06', { date: '2026-11-06', amount: 800 });
+  const b = confirmOccurrence(l1, item.id, '2026-11-20', { date: '2026-11-20', amount: 400 });
+  const back = parseImport(JSON.stringify(buildExport(a, 'test'))).ledger;
+  assert.equal(recurringItems(back)[0].everyDays, 14);
+  assert.ok(back.transactions.some((t) => t.scheduledPeriod === '2026-11-06'));
+  const { merged, groups } = prepareMerge({ base: l1, local: a, remote: b });
+  assert.equal(groups.length, 0);
+  assert.deepEqual(merged.transactions.filter((t) => t.scheduledItemId === item.id).map((t) => t.scheduledPeriod).sort(), ['2026-11-06', '2026-11-20']);
+  assert.deepEqual(projections(merged, '2026-11-30', HOL).map((p) => p.period), ['2026-10-23']);
+});
+test('an older device reads a fortnightly item as roughly monthly (it can’t show it properly, but keeps it)', () => {
+  const s = setup();
+  const { item } = addRecurring(s.ledger, bins(s.current.id));
+  assert.equal(item.everyMonths, 1); // the approximation older versions fall back on
+  assert.equal(item.day, 23);
 });
 
 console.log('v0.9 — finished series (Expired section)');

@@ -7,6 +7,7 @@
  *   - recurring item  { recordType: 'recurring', ... }   the rule
  *   - occurrence      { recordType: 'occurrence', ... }  a skip or a one-off
  *                     change to one month's entry, id `occ:<itemId>:<YYYY-MM>`
+ *                     (v0.15.3: `occ:<itemId>:<YYYY-MM-DD>` for a weekly/fortnightly item, see below)
  * Confirmed occurrences are ordinary transactions tagged with
  * scheduledItemId + scheduledPeriod, with an id built from the item and
  * month (`sched:<itemId>:<YYYY-MM>`), so two devices confirming the same one
@@ -16,12 +17,17 @@
  * from the rules every time the screen is drawn (like balances), so there is
  * nothing to fall out of step or duplicate between devices.
  *
- * An occurrence is identified by its MONTH ("period"), not its date: every
- * frequency offered (monthly, every N months, yearly, every N days with
- * N >= 31) is at most once a month, and keying by month means changing an
- * item's day doesn't orphan months already confirmed or skipped. That is why
- * "every N days" has a minimum of 31 — weekly/fortnightly would need
- * occurrences keyed by date instead (not built).
+ * An occurrence is identified by its MONTH ("period"), not its date: monthly,
+ * every N months, yearly and every N days with N >= 31 are at most once a
+ * month, and keying by month means changing an item's day doesn't orphan
+ * months already confirmed or skipped.
+ *
+ * v0.15.3: weekly, fortnightly and every N days with N < 31 can fall more than
+ * once in a month, so for those (isDateKeyed) the "period" is instead the
+ * payment's own series date, YYYY-MM-DD (before any weekend shift). Everything
+ * that carries a period (confirmed ids, skips/one-offs, numbering) just holds
+ * the longer string. Items of 31 days or more are keyed by month exactly as
+ * before, so nothing already confirmed or skipped moves.
  */
 import { LoanTransferError, assertNoLoanTransferOut } from './limits.js';
 import { randomUUID } from './id.js';
@@ -32,8 +38,12 @@ import { envelopeConfig, validateSplits, fitSplits } from './envelopes.js';
 import { ticketSettings, ticketProjections, ticketLegs, returnProjections, returnLegs } from './tickets.js';
 
 export const MAX_HORIZON_MONTHS = 12;
-/** "Every N days" bounds. 31 is the smallest gap that can never land twice in one month (see above). */
-export const MIN_EVERY_DAYS = 31;
+/** "Every N days" bounds. v0.15.3: down from 31 to 7 (weekly) now that short gaps are keyed by date. */
+export const MIN_EVERY_DAYS = 7;
+/** 31 is the smallest gap that can never land twice in one month: anything shorter is keyed by date (see above). */
+export const DATE_KEYED_BELOW_DAYS = 31;
+/** v0.15.3: true for a weekly / fortnightly / under-31-days item, whose occurrences are keyed by date, not month. */
+export const isDateKeyed = (item) => Boolean(item?.everyDays && item.everyDays < DATE_KEYED_BELOW_DAYS && !item.payStatement);
 export const MAX_EVERY_DAYS = 366;
 
 /**
@@ -78,7 +88,7 @@ export const MAX_EVERY_DAYS = 366;
  * @property {string} id                 - `occ:<itemId>:<period>`
  * @property {'occurrence'} recordType
  * @property {string} itemId
- * @property {string} period             - YYYY-MM
+ * @property {string} period             - YYYY-MM (YYYY-MM-DD for a date-keyed item, v0.15.3)
  * @property {boolean} skipped
  * @property {string|null} date          - one-off date, or null = the series' date
  * @property {number|null} amount        - one-off amount, or null = the series' amount
@@ -149,6 +159,19 @@ export function statementCardFor(item, accounts) {
 }
 
 /**
+ * Every occurrence of an item in a month: [{ period, nominal, date }] (date after
+ * the weekend rule). Zero or one, except for a date-keyed item (v0.15.3), which
+ * can have several — each with its own date as its period.
+ */
+function occurrencesInMonth(item, month, holidays, card) {
+  if (!card && isDateKeyed(item)) {
+    return nominalDatesByDays(item, month).map((nominal) => ({ period: nominal, nominal, date: shiftToWorkingDay(nominal, item.shift, holidays) }));
+  }
+  const o = occurrenceDate(item, month, holidays, card);
+  return o ? [{ period: month, ...o }] : [];
+}
+
+/**
  * The date an item falls due in a month (after the weekend rule), or null.
  * For a statement payment: the due date of the previous month's statement.
  */
@@ -168,23 +191,36 @@ const DAY_MS = 86400000;
 const dayNo = (iso) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / DAY_MS;
 const isoOfDay = (n) => new Date(n * DAY_MS).toISOString().slice(0, 10);
 
-/** Every-N-days: the one series date in a month (N >= 31, so never two), or null. */
-function nominalDateByDays(item, period) {
+/** Every-N-days: all the series dates in a month, oldest first (one at most when N >= 31). */
+function nominalDatesByDays(item, period) {
   const { y, m } = periodParts(period);
   const first = dayNo(`${period}-01`);
   const last = dayNo(`${period}-${pad(daysInMonth(y, m))}`);
   const start = dayNo(item.startDate);
-  if (last < start) return null;
+  const out = [];
+  if (last < start) return out;
   const k = Math.ceil((Math.max(first, start) - start) / item.everyDays);
-  const n = start + k * item.everyDays;
-  if (n > last) return null;
-  const iso = isoOfDay(n);
-  if (item.endDate && iso > item.endDate) return null;
-  return iso;
+  for (let n = start + k * item.everyDays; n <= last; n += item.everyDays) {
+    const iso = isoOfDay(n);
+    if (item.endDate && iso > item.endDate) break;
+    out.push(iso);
+  }
+  return out;
+}
+/** Every-N-days: the first series date in a month, or null. */
+function nominalDateByDays(item, period) {
+  return nominalDatesByDays(item, period)[0] ?? null;
 }
 
-/** The series' own date in a month (before any weekend shift), or null if not due that month. */
+/**
+ * The series' own date in a month (before any weekend shift), or null if not due that month.
+ * A date-keyed item (v0.15.3) can fall more than once a month: this gives the first. Pass its
+ * period (a date) to check that date is one of its own.
+ */
 export function nominalDate(item, period) {
+  if (item.everyDays && period.length === 10) {
+    return nominalDatesByDays(item, period.slice(0, 7)).includes(period) ? period : null;
+  }
   if (item.everyDays) return nominalDateByDays(item, period);
   const offset = monthsBetween(periodOf(item.startDate), period);
   if (offset < 0 || offset % item.everyMonths !== 0) return null;
@@ -204,8 +240,7 @@ export function seriesDates(item, toIso, holidays, card = null) {
   const out = [];
   const last = addMonths(periodOf(toIso), 1); // a 'before' shift can pull next month's 1st back into range
   for (let p = periodOf(item.startDate); monthsBetween(p, last) >= 0; p = addMonths(p, 1)) {
-    const o = occurrenceDate(item, p, holidays, card);
-    if (o && o.date <= toIso) out.push({ period: p, ...o });
+    for (const o of occurrencesInMonth(item, p, holidays, card)) if (o.date <= toIso) out.push(o);
   }
   return out;
 }
@@ -217,12 +252,12 @@ export function upcomingDates(item, fromIso, count, holidays, card = null) {
   let p = periodOf(item.startDate > fromIso ? item.startDate : fromIso);
   p = addMonths(p, -1);
   for (let guard = 0; out.length < count && guard < 600; guard++, p = addMonths(p, 1)) {
-    const o = occurrenceDate(item, p, holidays, card);
-    if (!o) {
+    const os = occurrencesInMonth(item, p, holidays, card);
+    if (!os.length) {
       if (item.endDate && `${p}-01` > item.endDate) break;
       continue;
     }
-    if (o.date >= fromIso) out.push(o.date);
+    for (const o of os) if (o.date >= fromIso && out.length < count) out.push(o.date);
   }
   return out;
 }
@@ -235,7 +270,8 @@ function allPeriods(item) {
   const out = [];
   const last = periodOf(item.endDate);
   for (let p = periodOf(item.startDate); monthsBetween(p, last) >= 0; p = addMonths(p, 1)) {
-    if (nominalDate(item, p)) out.push(p);
+    if (isDateKeyed(item)) out.push(...nominalDatesByDays(item, p)); // v0.15.3: each date is its own period
+    else if (nominalDate(item, p)) out.push(p);
   }
   return out;
 }
@@ -512,6 +548,9 @@ function validateItem(f, ledger) {
   if (f.everyDays !== null && (!Number.isInteger(f.everyDays) || f.everyDays < MIN_EVERY_DAYS || f.everyDays > MAX_EVERY_DAYS)) {
     throw new Error(`Repeat every ${MIN_EVERY_DAYS} to ${MAX_EVERY_DAYS} days`);
   }
+  if (f.amountFrom === TRACKER_SOURCE && isDateKeyed(f)) { // v0.15.3: the tracker publishes one figure a month
+    throw new Error('The ticket tracker’s figure is monthly — repeat it monthly, or every 31 days or more');
+  }
   if (!Number.isInteger(f.everyMonths) || f.everyMonths < 1 || f.everyMonths > 12) throw new Error('Repeat every 1 to 12 months');
   if (!Number.isInteger(f.day) || f.day < 1 || f.day > 31) throw new Error('Day of the month must be 1 to 31');
   if (!isIso(f.startDate)) throw new Error('A start date is required');
@@ -664,6 +703,10 @@ export function describeRule(item, card = null) {
   if (item.everyDays) {
     const from = new Date(`${item.startDate}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
     const shift = item.shift === 'before' ? ' · working day before' : item.shift === 'after' ? ' · next working day' : '';
+    if (item.everyDays === 7 || item.everyDays === 14) { // v0.15.3: "Fortnightly on Fridays, from 23 Oct 2026"
+      const weekday = new Date(`${item.startDate}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'UTC' });
+      return `${item.everyDays === 7 ? 'Weekly' : 'Fortnightly'} on ${weekday}s, from ${from}${shift}`;
+    }
     return `Every ${item.everyDays} days from ${from}${shift}`;
   }
   const freq =
