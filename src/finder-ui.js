@@ -82,7 +82,7 @@ export function createFinderUI(ctx) {
       onclick: () => { state.query = ''; state.forced = null; search.value = ''; clear.hidden = true; draw(); search.focus(); } }, '✕');
     const chips = h('div', { class: 'arch-chips', role: 'group', 'aria-label': 'Accounts' },
       columns.map((c) => h('button', {
-        type: 'button', class: 'arch-chip', 'aria-pressed': String(state.columns.has(c.id)), style: { '--acc': c.colour },
+        type: 'button', class: 'arch-chip', 'aria-pressed': String(state.columns.has(c.id)), style: { '--acc': c.colour }, dataset: { col: c.id },
         title: c.history ? `${c.name} (history only — not linked to one of your accounts)` : c.name,
         onclick: (e) => {
           if (state.columns.has(c.id)) state.columns.delete(c.id); else state.columns.add(c.id);
@@ -104,6 +104,7 @@ export function createFinderUI(ctx) {
     const summary = dlg.querySelector('.fd-summary');
     if (!results) return;
     const q = activeQuery();
+    showChips(q);
     if (!q && !state.columns.size) {
       const typed = state.query.trim();
       summary.textContent = typed
@@ -125,6 +126,20 @@ export function createFinderUI(ctx) {
       : 'No matches';
     if (!r.count) { results.replaceChildren(); return; }
     results.replaceChildren(ctx.isWide() ? table(cols, r) : list(cols, r));
+  }
+
+  /**
+   * v0.15.2 (Wayne, 17 Oct): with a search typed, only the account pills that
+   * have a match are shown (plus any already picked) — years of old accounts
+   * made the row of pills cluttered. With no search, every pill shows.
+   */
+  function showChips(q) {
+    const dlg = $('finderDialog');
+    const hit = q ? new Set(Object.keys(findRows(rows, { query: q }).totals)) : null;
+    for (const chip of dlg.querySelectorAll('.arch-chip')) {
+      const id = chip.dataset.col;
+      chip.hidden = Boolean(hit) && !hit.has(id) && !state.columns.has(id);
+    }
   }
 
   const rowTitle = (x) => (x.source === 'archive'
