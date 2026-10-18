@@ -91,6 +91,26 @@ try:
         pg.click('#txDialog button:has-text("Confirm")'); saved(pg, 'Confirmed')
         bins = [x for x in feed() if 'Bin cleaning' in x]
         check('after confirming 23 Oct: 7 projected left', len(bins) == 7, len(bins))
+
+        # with a confirmed entry, switching to Monthly is refused with an explanation
+        pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
+        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#recurringDialog .rec-row:has-text("Bin cleaning")'); pg.wait_for_selector(f'{D}[open]')
+        pg.select_option(FREQ, value='1')
+        pg.fill(f'{D} input[placeholder="1–31"]', '23')
+        prev = pg.text_content(f'{D} .rec-preview') or ''
+        check('editor explains: already has confirmed entries', 'already has confirmed entries' in prev, prev)
+        pg.screenshot(path=f'{OUT}/wf5-locked.png')
+        pg.click(f'{D} button[type=submit]'); pg.wait_for_timeout(500)
+        check('not saved (dialog still open)', pg.is_visible(f'{D}[open]'))
+        pg.click(f'{D} .icon-btn')
+        mt = norm(pg.text_content('#recurringDialog'))
+        check('still Fortnightly', 'Fortnightly on Fridays from 23 Oct 2026' in mt, mt)
+        # other edits still save
+        pg.click('#recurringDialog .rec-row:has-text("Bin cleaning")'); pg.wait_for_selector(f'{D}[open]')
+        pg.fill(f'{D} input[placeholder="0.00"]', '9')
+        pg.click(f'{D} button[type=submit]'); pg.wait_for_selector(f'{D}[open]', state='detached'); saved(pg, 'Recurring item updated')
+        check('amount change saved', '£9.00' in pg.text_content('#recurringDialog'))
         b.close()
 finally:
     server.terminate()

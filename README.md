@@ -13,7 +13,10 @@ date (`YYYY-MM-DD`) instead of the month (`isDateKeyed` in `lib/schedule.js`); i
 or more are keyed by month as before, so nothing already confirmed or skipped moves. The ticket
 tracker amount isn't offered for these (its figure is monthly). The entry dialog says "Skip this
 one" / "Save for this one only". Older versions read a weekly/fortnightly item as roughly monthly,
-so keep both devices on 0.15.3 before adding one.
+so keep both devices on 0.15.3 before adding one. Once an item has confirmed entries, its repeat can't
+switch between weekly/fortnightly and the monthly kinds, and a weekly/fortnightly item can't
+change its gap or first date (`frequencyChangeBlocked`): the confirmed entries would no longer
+line up and would show again as projected. The editor says to end it and add a new item.
 
 **v0.15.2:** in Find (phone and desktop, same code), once a search is typed only the
 account pills with a match are shown (plus any already picked); with no search, all show.

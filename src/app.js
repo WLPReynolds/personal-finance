@@ -43,7 +43,7 @@ import {
 import {
   MAX_HORIZON_MONTHS, horizonEnd, withProjections, recurringItems,
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
-  upcomingDates, describeRule, MIN_EVERY_DAYS, MAX_EVERY_DAYS, DATE_KEYED_BELOW_DAYS, itemNumbering, seriesAmount, numberLabel, statementCardFor, seriesFinished,
+  upcomingDates, describeRule, MIN_EVERY_DAYS, MAX_EVERY_DAYS, DATE_KEYED_BELOW_DAYS, frequencyChangeBlocked, itemNumbering, seriesAmount, numberLabel, statementCardFor, seriesFinished,
   envelopeLegAccountId,
 } from './lib/schedule.js';
 import {
@@ -2609,6 +2609,8 @@ function openRecurringEditor(itemId) {
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
     } else if (d.everyDays != null && !(d.everyDays >= MIN_EVERY_DAYS && d.everyDays <= MAX_EVERY_DAYS)) {
       text = `Repeat every ${MIN_EVERY_DAYS} to ${MAX_EVERY_DAYS} days.`;
+    } else if (existing && frequencyChangeBlocked(state.ledger, existing, d)) { // v0.15.3: say so before Save
+      text = frequencyChangeBlocked(state.ledger, existing, d);
     } else if (d.day >= 1 && d.day <= 31 && d.everyMonths >= 1 && d.everyMonths <= 12 && d.startDate) {
       const next = upcomingDates(d, todayIso(), 3, state.holidays);
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';

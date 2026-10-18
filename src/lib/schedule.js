@@ -613,12 +613,36 @@ export function addRecurring(ledger, fields) {
   return { ledger: touch({ ...ledger, scheduledItems: [...(ledger.scheduledItems ?? []), item] }), item };
 }
 
+/**
+ * v0.15.3: why an edit to a series can't keep its confirmed entries lined up, or null if it can.
+ * Confirmed entries are matched to the series by their key: a month for monthly-type items, the
+ * payment date for weekly/fortnightly (isDateKeyed). Once an item has confirmed entries:
+ *  - switching between the two kinds would leave every confirmed entry unmatched, so they would
+ *    show again as projected (counted twice);
+ *  - for a weekly/fortnightly item, changing how often or the first payment date moves its dates,
+ *    with the same effect.
+ * Either way the answer is to end the item and add a new one (Wayne, 18 Oct: option a).
+ */
+export const FREQUENCY_LOCKED_MESSAGE =
+  'This item already has confirmed entries, so how often it repeats can’t change. Give it an end date (To) and add a new recurring item for the new pattern.';
+export function frequencyChangeBlocked(ledger, existing, next) {
+  if (!existing || !next) return null;
+  if (!ledger.transactions.some((t) => t.scheduledItemId === existing.id)) return null;
+  const was = isDateKeyed(existing);
+  const now = isDateKeyed(next);
+  if (was !== now) return FREQUENCY_LOCKED_MESSAGE;
+  if (now && (existing.everyDays !== next.everyDays || existing.startDate !== next.startDate)) return FREQUENCY_LOCKED_MESSAGE;
+  return null;
+}
+
 /** Edit the whole series: every occurrence not yet confirmed follows the new rule. */
 export function updateRecurring(ledger, id, fields) {
   const existing = recurringItems(ledger).find((i) => i.id === id);
   if (!existing) throw new Error('Recurring item not found');
   const next = { ...existing, ...cleanItemFields({ ...existing, ...fields }) };
   validateItem(next, ledger);
+  const blocked = frequencyChangeBlocked(ledger, existing, next);
+  if (blocked) throw new Error(blocked);
   return touch({ ...ledger, scheduledItems: ledger.scheduledItems.map((r) => (r.id === id ? next : r)) });
 }
 

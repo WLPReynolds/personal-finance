@@ -529,13 +529,48 @@ test('items of 31 days or more are still keyed by month (nothing already confirm
   const l2 = confirmOccurrence(l1, item.id, '2026-10', { date: '2026-10-15', amount: 599 });
   assert.deepEqual(projections(l2, '2027-01-31', HOL).map((p) => p.period), ['2027-01']);
 });
-test('switching monthly → fortnightly: months already confirmed stay as they are', () => {
+test('with confirmed entries, monthly ↔ fortnightly is refused (end it and add a new one)', () => {
   const s = setup();
   const { ledger: l1, item } = addRecurring(s.ledger, base(s.current.id, { day: 23, startDate: '2026-10-23' }));
-  let l = confirmOccurrence(l1, item.id, '2026-10', { date: '2026-10-23', amount: 599 });
-  l = updateRecurring(l, item.id, { everyDays: 14, startDate: '2026-11-06' });
+  const l = confirmOccurrence(l1, item.id, '2026-10', { date: '2026-10-23', amount: 599 });
+  assert.throws(() => updateRecurring(l, item.id, { everyDays: 14 }), /already has confirmed entries/);
+  assert.throws(() => updateRecurring(l, item.id, { everyDays: 7, startDate: '2026-11-06' }), /already has confirmed entries/);
+  // the confirmed entry is untouched and nothing is counted twice
   assert.equal(l.transactions.filter((t) => t.scheduledItemId === item.id).length, 1);
-  assert.deepEqual(projections(l, '2026-11-30', HOL).map((p) => p.date), ['2026-11-06', '2026-11-20']);
+  assert.deepEqual(projections(l, '2026-11-30', HOL).map((p) => p.date), ['2026-11-23']);
+  // ending it and adding a new fortnightly item is the way
+  const ended = updateRecurring(l, item.id, { endDate: '2026-10-31' });
+  const { ledger: l2 } = addRecurring(ended, bins(s.current.id, { startDate: '2026-11-06' }));
+  assert.deepEqual(projections(l2, '2026-11-30', HOL).map((p) => p.date), ['2026-11-06', '2026-11-20']);
+});
+test('with confirmed entries, fortnightly → monthly is refused too', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, bins(s.current.id));
+  const l = confirmOccurrence(l1, item.id, '2026-10-23', { date: '2026-10-23', amount: 800 });
+  assert.throws(() => updateRecurring(l, item.id, { everyDays: null, everyMonths: 1, day: 23 }), /already has confirmed entries/);
+  assert.throws(() => updateRecurring(l, item.id, { everyDays: 31 }), /already has confirmed entries/);
+});
+test('with confirmed entries, a fortnightly item can’t change its gap or first date — other edits are fine', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, bins(s.current.id));
+  const l = confirmOccurrence(l1, item.id, '2026-10-23', { date: '2026-10-23', amount: 800 });
+  assert.throws(() => updateRecurring(l, item.id, { everyDays: 7 }), /already has confirmed entries/);
+  assert.throws(() => updateRecurring(l, item.id, { startDate: '2026-10-22' }), /already has confirmed entries/);
+  const ok = updateRecurring(l, item.id, { amount: 900, description: 'Bins', shift: 'after', endDate: '2027-03-31' });
+  assert.equal(recurringItems(ok)[0].amount, 900);
+});
+test('without confirmed entries, any switch is allowed (nothing to line up)', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, base(s.current.id, { day: 23, startDate: '2026-10-23' }));
+  const l = updateRecurring(l1, item.id, { everyDays: 14 });
+  assert.deepEqual(projections(l, '2026-11-30', HOL).map((p) => p.date), ['2026-10-23', '2026-11-06', '2026-11-20']);
+  assert.equal(recurringItems(updateRecurring(l, item.id, { everyDays: null, everyMonths: 1, day: 23 }))[0].everyDays, null);
+});
+test('monthly-type items keep their old freedom: 3-monthly ↔ every 90 days with confirmed months still allowed', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, base(s.current.id, { everyMonths: 3, day: 15, startDate: '2026-10-15' }));
+  const l = confirmOccurrence(l1, item.id, '2026-10', { date: '2026-10-15', amount: 599 });
+  assert.equal(recurringItems(updateRecurring(l, item.id, { everyDays: 90 }))[0].everyDays, 90);
 });
 test('a fortnightly item survives export / import; two devices confirming different dates merge cleanly', () => {
   const s = setup();
