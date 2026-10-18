@@ -4,7 +4,20 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.15.4 — Export to Excel; v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.15.4: Export to Excel** (⚙ → Export to Excel…)
+- Any From/To dates, from the earliest imported history up to 12 months ahead; projected
+  (not yet confirmed) entries optional once To is in the future.
+- Any accounts, each optional (joint included when it's on). History accounts keep their own
+  names; only one with exactly the same name as a live account carries on in that column.
+- Laid out like Budget.xlsx: a sheet per year, Date / Description, a Credit / Debit / Balance
+  block per account (plus Envelope on envelope accounts and ✓ for reconciled), a Status column,
+  a medium vertical border between accounts, a thin line at each new month. Values only.
+- Each sheet starts with Brought forward. Grey cells where an account has no data (before it
+  opened, after it closed). Statement rows in upper case, tinted the card's colour; projected rows
+  in grey italics. An exported history year imports back into History.
+- Written on the device by `src/lib/xlsx-write.js` (no library); rows from `src/lib/excel-export.js`.
 
 **v0.15.3:** recurring items can repeat **Weekly** or **Fortnightly** (their own choices in
 Repeats, stored as every 7 / 14 days), and "Every so many days" now goes down to 7. Items under

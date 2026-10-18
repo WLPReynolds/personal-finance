@@ -913,3 +913,9 @@ dialog.sheet-wide { height: 94dvh; }
 .arch-link-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 500; }
 .arch-suggest { color: var(--credit); font-weight: 600; }
 @media (max-width: 480px) { .arch-link-row { grid-template-columns: 1fr; gap: 4px; } }
+
+/* v0.15.4: Export to Excel */
+.exp-body { display: grid; gap: 12px; align-content: start; }
+.exp-body p { margin: 0; }
+.exp-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.exp-sub { margin: 0; align-self: center; }
