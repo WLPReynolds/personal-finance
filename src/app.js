@@ -43,7 +43,7 @@ import {
 import {
   MAX_HORIZON_MONTHS, horizonEnd, withProjections, recurringItems,
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
-  upcomingDates, describeRule, MIN_EVERY_DAYS, MAX_EVERY_DAYS, itemNumbering, seriesAmount, numberLabel, statementCardFor, seriesFinished,
+  upcomingDates, describeRule, MIN_EVERY_DAYS, MAX_EVERY_DAYS, DATE_KEYED_BELOW_DAYS, frequencyChangeBlocked, itemNumbering, seriesAmount, numberLabel, statementCardFor, seriesFinished,
   envelopeLegAccountId,
 } from './lib/schedule.js';
 import {
@@ -61,7 +61,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.15.2';
+export const APP_VERSION = '0.15.3';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -417,7 +417,7 @@ function projectionTags(p, today) {
   if (p.date <= today) return { cls: 'overdue', label: p.date === today ? 'due today · tap to confirm' : 'not confirmed yet' };
   const from = p.amountSource === 'tracker' && p.amount === p.seriesAmount ? ' · ticket tracker'
     : p.amountSource === 'fallback' && p.amount === p.seriesAmount ? ' · estimate (no tracker figure)' : '';
-  return { cls: '', label: (p.changed ? 'projected · changed for this month' : 'projected') + from };
+  return { cls: '', label: (p.changed ? `projected · changed for this ${p.period?.length === 10 ? 'one' : 'month'}` : 'projected') + from };
 }
 
 // ------------------------------------------------------------------ card statements
@@ -1782,6 +1782,7 @@ function recentDescriptions(accountId) {
 // ------------------------------------------------------------------ recurring: one month's entry
 
 function periodLabel(period) {
+  if (period?.length === 10) return longDate(period); // v0.15.3: a weekly/fortnightly entry's period is its own date
   return monthYearLabel(`${period}-01`);
 }
 function signedAmount(kind, amount) {
@@ -1816,6 +1817,8 @@ function openOccurrenceDialog(itemId, period) {
   if (!p) return; // confirmed meanwhile (e.g. by a sync)
   const account = accountById(item.accountId);
   const s = institutionStyle(account?.institution ?? 'other');
+  // v0.15.3: a weekly/fortnightly entry is one of several in the month, so the buttons say "this one"
+  const one = period.length === 10 ? 'one' : 'month';
 
   const amount = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input big', value: penceToInput(p.amount) });
   const date = h('input', { type: 'date', required: true, value: p.date });
@@ -1847,7 +1850,7 @@ function openOccurrenceDialog(itemId, period) {
   const skipBtn = h('button', {
     type: 'button', class: 'btn-secondary',
     onclick: () => apply(() => setOccurrence(state.ledger, itemId, period, { skipped: true }), `Skipped for ${periodLabel(period)}`),
-  }, 'Skip this month');
+  }, `Skip this ${one}`);
   const thisMonthBtn = h('button', {
     type: 'button', class: 'btn-ghost',
     onclick: () => {
@@ -1860,11 +1863,11 @@ function openOccurrenceDialog(itemId, period) {
         description: f.description === item.description ? null : f.description,
       }), `Changed for ${periodLabel(period)} only`);
     },
-  }, 'Save for this month only');
+  }, `Save for this ${one} only`);
   const resetBtn = p.changed ? h('button', {
     type: 'button', class: 'btn-ghost',
     onclick: () => apply(() => setOccurrence(state.ledger, itemId, period, { date: null, amount: null, description: null }), 'Back to the series'),
-  }, 'Undo this month’s changes') : null;
+  }, `Undo this ${one}’s changes`) : null;
   const seriesBtn = h('button', { type: 'button', class: 'btn-ghost', onclick: () => { close(); openRecurringEditor(itemId); } }, 'Edit series…');
 
   const today = todayIso();
@@ -1904,7 +1907,7 @@ function openOccurrenceDialog(itemId, period) {
     : [
         h('p', { class: `rec-status ${p.date <= today ? 'rec-due' : ''}` }, status,
           p.number ? ` Payment ${p.number.n} of ${p.number.of}${p.number.n === p.number.of ? ' — the last one' : ''}.` : null,
-          p.changed ? h('span', { class: 'muted' }, ` Changed for this month (series: ${longDate(p.seriesDate)}, ${formatPence(p.seriesAmount)}).`) : null),
+          p.changed ? h('span', { class: 'muted' }, ` Changed for this ${one} (series: ${longDate(p.seriesDate)}, ${formatPence(p.seriesAmount)}).`) : null),
         stmtLine,
         trackerLine,
         moveLine,
@@ -2489,9 +2492,12 @@ function openRecurringEditor(itemId) {
   }
 
   const every = existing?.everyMonths ?? 1;
-  const freqNow = existing?.everyDays ? 'd' : every === 1 ? '1' : every === 12 ? '12' : 'n';
+  // v0.15.3: Weekly and Fortnightly are their own choices (stored as every 7 / 14 days)
+  const FIXED_DAYS = { w: 7, f: 14 };
+  const freqNow = existing?.everyDays === 7 ? 'w' : existing?.everyDays === 14 ? 'f' : existing?.everyDays ? 'd'
+    : every === 1 ? '1' : every === 12 ? '12' : 'n';
   const freq = h('select', {},
-    [['1', 'Monthly'], ['n', 'Every few months'], ['12', 'Yearly'], ['d', 'Every so many days']].map(([v, l]) =>
+    [['w', 'Weekly'], ['f', 'Fortnightly'], ['1', 'Monthly'], ['n', 'Every few months'], ['12', 'Yearly'], ['d', 'Every so many days']].map(([v, l]) =>
       h('option', { value: v, selected: v === freqNow }, l)));
   const nMonths = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', value: freqNow === 'n' ? String(every) : '6' });
   const nField = h('label', { class: 'field' }, h('span', {}, 'Every how many months?'), nMonths);
@@ -2538,10 +2544,11 @@ function openRecurringEditor(itemId) {
         envelopeSplits: envPicker.el.hidden ? null : envPicker.value().splits ?? null,
       };
     }
-    const byDays = freq.value === 'd';
+    const byDays = freq.value === 'd' || freq.value in FIXED_DAYS;
     const everyMonths = byDays ? 1 : freq.value === 'n' ? Number.parseInt(nMonths.value, 10) : Number(freq.value);
     // every N days: whole numbers only ("90.5" or "90abc" is not 90)
-    const everyDays = byDays ? (/^\s*\d+\s*$/.test(nDays.value) ? Number(nDays.value) : NaN) : null;
+    const everyDays = freq.value in FIXED_DAYS ? FIXED_DAYS[freq.value]
+      : byDays ? (/^\s*\d+\s*$/.test(nDays.value) ? Number(nDays.value) : NaN) : null;
     return {
       payStatement: false,
       amountFrom: fromTracker.checked && kind !== 'move' ? TRACKER_SOURCE : null,
@@ -2576,8 +2583,11 @@ function openRecurringEditor(itemId) {
       : card?.type === 'credit' ? `Set ${card.name}’s statement date first (its Account… button).` : '';
     const stmtOn = payingStatement();
     for (const el of [freqDayPair, shiftField]) el.hidden = stmtOn;
+    // v0.15.3: the tracker's figure is monthly, so it isn't offered for weekly / fortnightly / under 31 days
+    const shortRepeat = freq.value in FIXED_DAYS || (freq.value === 'd' && Number(nDays.value) < DATE_KEYED_BELOW_DAYS);
+    if (shortRepeat && !stmtOn) fromTracker.checked = false;
     const trackerOn = !stmtOn && fromTracker.checked && kind !== 'move';
-    trackerField.hidden = stmtOn || kind === 'move';
+    trackerField.hidden = stmtOn || kind === 'move' || shortRepeat;
     trackerHint.textContent = trackerOn
       ? `Each month uses the tracker’s figure for the pay period starting that month; the amount below is used for any month it has no figure for. ${trackerStatusText()}`
       : 'For Train fare/Parking: the figure the ticket tracker works out for each pay period.';
@@ -2586,9 +2596,10 @@ function openRecurringEditor(itemId) {
     nField.hidden = stmtOn || freq.value !== 'n';
     nDaysField.hidden = stmtOn || freq.value !== 'd';
     nDays.disabled = nDaysField.hidden; // a hidden, half-typed number mustn't block saving
-    dayField.hidden = freq.value === 'd';
+    dayField.hidden = freq.value === 'd' || freq.value in FIXED_DAYS;
     endFields.hidden = stmtOn || !end.value;
-    startHint.textContent = freq.value === 'd' && !stmtOn ? 'The date of the first payment — it repeats every so many days from here.'
+    startHint.textContent = freq.value in FIXED_DAYS && !stmtOn ? `The date of the first payment — it repeats ${freq.value === 'w' ? 'every week' : 'every two weeks'} on that weekday.`
+      : freq.value === 'd' && !stmtOn ? 'The date of the first payment — it repeats every so many days from here.'
       : freq.value === '1' || stmtOn ? 'Nothing before this date.' : 'Nothing before this date — and it repeats counting from this month.';
     syncEnvelope();
     const d = draft();
@@ -2598,6 +2609,8 @@ function openRecurringEditor(itemId) {
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
     } else if (d.everyDays != null && !(d.everyDays >= MIN_EVERY_DAYS && d.everyDays <= MAX_EVERY_DAYS)) {
       text = `Repeat every ${MIN_EVERY_DAYS} to ${MAX_EVERY_DAYS} days.`;
+    } else if (existing && frequencyChangeBlocked(state.ledger, existing, d)) { // v0.15.3: say so before Save
+      text = frequencyChangeBlocked(state.ledger, existing, d);
     } else if (d.day >= 1 && d.day <= 31 && d.everyMonths >= 1 && d.everyMonths <= 12 && d.startDate) {
       const next = upcomingDates(d, todayIso(), 3, state.holidays);
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
@@ -2616,7 +2629,7 @@ function openRecurringEditor(itemId) {
           const lastP = periods[periods.length - 1];
           const lastAmt = seriesAmount({ ...d, finalAmount: d.finalAmount ?? null }, lastP, numbering);
           text += `\n${periods.length} payment${periods.length === 1 ? '' : 's'}, numbered ${first.n}–${first.of} of ${first.of}`;
-          if (Number.isInteger(lastAmt)) text += ` · last one ${formatPence(lastAmt)} in ${periodLabel(lastP)}`;
+          if (Number.isInteger(lastAmt)) text += ` · last one ${formatPence(lastAmt)} ${lastP.length === 10 ? 'on' : 'in'} ${periodLabel(lastP)}`;
         }
       }
     }

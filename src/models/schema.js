@@ -80,7 +80,7 @@
  *                                            null = whole amount Unallocated. On a note (amount 0) two SIGNED splits adding up
  *                                            to 0 = a move between envelopes (envelopeId null = Unallocated)
  * @property {string|null} scheduledItemId - set when this is a confirmed entry of a recurring item
- * @property {string} [scheduledPeriod]    - YYYY-MM of the recurring item's month it confirms (only with scheduledItemId)
+ * @property {string} [scheduledPeriod]    - YYYY-MM of the recurring item's month it confirms (only with scheduledItemId); YYYY-MM-DD for a weekly/fortnightly item (v0.15.3)
  * @property {boolean} isProjected         - always false when stored; true only on derived projected rows (never saved)
  * @property {string|null} [statementMonth] - v0.7, card entries only: YYYY-MM of the statement it's really on, when that
  *                                            differs from its date (see statements.js). null/absent = by date

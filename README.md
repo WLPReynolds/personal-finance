@@ -4,7 +4,19 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.15.3:** recurring items can repeat **Weekly** or **Fortnightly** (their own choices in
+Repeats, stored as every 7 / 14 days), and "Every so many days" now goes down to 7. Items under
+31 days can fall more than once a month, so their occurrences are keyed by the payment's own
+date (`YYYY-MM-DD`) instead of the month (`isDateKeyed` in `lib/schedule.js`); items of 31 days
+or more are keyed by month as before, so nothing already confirmed or skipped moves. The ticket
+tracker amount isn't offered for these (its figure is monthly). The entry dialog says "Skip this
+one" / "Save for this one only". Older versions read a weekly/fortnightly item as roughly monthly,
+so keep both devices on 0.15.3 before adding one. Once an item has confirmed entries, its repeat can't
+switch between weekly/fortnightly and the monthly kinds, and a weekly/fortnightly item can't
+change its gap or first date (`frequencyChangeBlocked`): the confirmed entries would no longer
+line up and would show again as projected. The editor says to end it and add a new item.
 
 **v0.15.2:** in Find (phone and desktop, same code), once a search is typed only the
 account pills with a match are shown (plus any already picked); with no search, all show.
