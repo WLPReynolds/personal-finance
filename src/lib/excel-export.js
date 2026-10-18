@@ -84,6 +84,11 @@ export function earliestDate(cols) {
 
 const inSpan = (col, date) => Boolean(col.start) && date >= col.start && date <= col.end;
 
+/** v0.15.5: does the account have any data between these dates? (Only those get a pill.) */
+export function hasDataIn(col, from, to) {
+  return Boolean(col.start) && col.start <= to && col.end >= from;
+}
+
 // ---------------------------------------------------------------- rows
 
 /**

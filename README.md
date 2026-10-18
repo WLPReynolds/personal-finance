@@ -4,7 +4,10 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.15.4 — Export to Excel; v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.15.5 — Export pills only for accounts with data in the dates; v0.15.4 — Export to Excel; v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.15.5:** in Export to Excel, only the accounts with data between the From and To dates get a
+pill (all of them while the dates are the wrong way round); a hidden pill's account is never exported.
 
 **v0.15.4: Export to Excel** (⚙ → Export to Excel…)
 - Any From/To dates, from the earliest imported history up to 12 months ahead; projected

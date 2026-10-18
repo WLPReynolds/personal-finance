@@ -1,6 +1,6 @@
 {
   "name": "finance-tracker",
-  "version": "0.15.4",
+  "version": "0.15.5",
   "description": "Personal finance tracking PWA - accounts, transactions, envelopes, trip mode, Drive sync",
   "type": "module",
   "scripts": {
