@@ -19,6 +19,8 @@ import { createSyncEngine } from './lib/sync-engine.js';
 import { shareTokenRequests } from './lib/shared-auth.js';
 import { createArchiveUI, flashInto } from './archive-ui.js';
 import { createFinderUI } from './finder-ui.js';
+import { createExportUI } from './export-ui.js';
+import { liveExportRows } from './lib/excel-export.js';
 import { archiveLinks, linkDecisions, setArchiveLinks } from './lib/finder.js';
 import {
   JOINT_FOLDER_NAME, JOINT_FILE_NAME, emptyJointLedger, isJointLedger, addJointAccount, combineLedgers, splitLedger,
@@ -61,7 +63,7 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.15.3';
+export const APP_VERSION = '0.15.4';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -514,6 +516,59 @@ const finderUI = createFinderUI({
   goLive: (x) => goToLiveRow(x),
   goHistory: (year, n) => archiveUI.openViewer({ year, row: n }),
 });
+
+// ---- v0.15.4: Export to Excel — history + live accounts as an .xlsx (src/export-ui.js)
+const exportUI = createExportUI({
+  h, $, toast, openDialog,
+  today: () => todayIso(),
+  maxDate: () => horizonEnd(todayIso(), MAX_HORIZON_MONTHS),
+  getArchive: () => archiveUI.getArchive(),
+  liveAccounts: () => state.ledger.accounts.map((a) => ({
+    id: a.id, name: a.name, colour: institutionStyle(a.institution).colour,
+    openingDate: a.openingDate, opening: displayOpening(a), active: a.active !== false,
+    lastDate: state.ledger.transactions.filter((t) => t.accountId === a.id).map((t) => t.date).sort().pop() ?? null,
+    envelopes: Boolean(envelopeConfig(a)),
+  })),
+  liveRows: ({ to, projected }) => exportLiveRows(to, projected),
+  canShare: () => { try { return Boolean(navigator.canShare?.({ files: [new File(['x'], 'x.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })] })); } catch { return false; } },
+  deliver: (file, name, share) => shareOrDownload(file, name, share, 'Personal Finance export'),
+});
+
+/** Every live account's rows up to `to`, worded as the grid words them, for the Excel export. */
+function exportLiveRows(to, projected) {
+  const base = projected ? withProjections(state.ledger, to, state.holidays, sources()) : state.ledger;
+  const view = withStatements(base, to, state.holidays);
+  const accounts = state.ledger.accounts;
+  const rows = buildGridRows(view, accounts);
+  const today = todayIso();
+  const txById = new Map(view.transactions.map((t) => [t.id, t]));
+  return liveExportRows(rows, {
+    reconciledIds: new Set(state.ledger.transactions.filter(isReconciled).map((t) => t.id)),
+    envText: (row, accountId) => {
+      const a = accountById(accountId);
+      const tx = envelopeConfig(a) && txById.get(row.cells[accountId]?.txId);
+      return tx ? envTag(tx, a)?.text ?? null : null;
+    },
+    textOf: (row) => `${row.description ?? ''}${row.seriesNo ? ` ${numberLabel(row.seriesNo)}` : ''}`,
+    statusText: (row) => {
+      if (row.statement) return row.date > today ? 'Estimate' : '';
+      const parts = [];
+      if (row.projection) parts.push('Projected');
+      if (row.stmtTag) {
+        const card = accountById(Object.keys(row.cells).find((id) => statementConfig(accountById(id))));
+        if (card) parts.push(stmtTagText(row.stmtTag.tag, row.stmtTag.month, card));
+      }
+      return parts.join(' · ');
+    },
+    statementText: (row) => {
+      const st = row.statement;
+      const card = accountById(Object.keys(row.cells)[0]);
+      const owed = st.owed === null ? '' : ` · ${formatPence(st.owed, { symbol: false })} owed, due ${longDate(st.dueDate)}`;
+      return `${card?.name ?? 'Card'} statement${owed}`;
+    },
+    colourOf: (id) => institutionStyle(accountById(id)?.institution ?? 'other').colour,
+  });
+}
 
 /**
  * Finder → the row in the grid (desktop) or in that account's list (phone),
@@ -3466,6 +3521,8 @@ function renderSettings() {
 
     archiveUI.settingsSection(),
 
+    exportUI.settingsSection(),
+
     h('section', { class: 'settings-section' },
       h('h3', {}, 'Recurring items'),
       h('p', { class: 'muted small' }, (() => {
@@ -3776,27 +3833,34 @@ function downloadBlob(file, name) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+/**
+ * Share a file (phone) or download it. → the message to show, or null if he
+ * closed the share sheet himself. v0.15.4: shared by the backup export and
+ * the Excel export.
+ */
+async function shareOrDownload(file, name, share, title) {
+  if (!share) { downloadBlob(file, name); return `Exported ${name}`; }
+  try {
+    await navigator.share({ files: [file], title });
+    return `Exported ${name}`;
+  } catch (err) {
+    if (err?.name === 'AbortError') return null;
+    // Some Android/PWA combinations refuse to share a file (seen as a
+    // "Permission denied" NotAllowedError) even though sharing text works
+    // fine. Rather than dead-ending, fall back to a plain download, which
+    // doesn't need that permission at all.
+    downloadBlob(file, name);
+    return `Couldn't open the share sheet, so downloaded ${name} instead`;
+  }
+}
+
 async function doExport(share, which = 'personal') {
   const joint = which === 'joint';
   const payload = JSON.stringify(buildExport(joint ? state.joint : state.personal, deviceLabel()), null, 1);
   const name = joint ? exportFileName().replace(/^finance-tracker-/, 'finance-joint-') : exportFileName();
   const file = new File([payload], name, { type: 'application/json' });
-  let message = `Exported ${name}`;
-  if (share) {
-    try {
-      await navigator.share({ files: [file], title: 'Finance Tracker export' });
-    } catch (err) {
-      if (err?.name === 'AbortError') return; // user closed the share sheet themselves — not an error
-      // Some Android/PWA combinations refuse to share a file (seen as a
-      // "Permission denied" NotAllowedError) even though sharing text works
-      // fine. Rather than dead-ending, fall back to a plain download, which
-      // doesn't need that permission at all.
-      downloadBlob(file, name);
-      message = `Couldn't open the share sheet, so downloaded ${name} instead`;
-    }
-  } else {
-    downloadBlob(file, name);
-  }
+  const message = await shareOrDownload(file, name, share, 'Finance Tracker export');
+  if (message === null) return; // user closed the share sheet themselves — not an error
   if (!joint) {
     state.meta = { ...state.meta, lastExportAt: new Date().toISOString() };
     await saveMeta(state.meta);
