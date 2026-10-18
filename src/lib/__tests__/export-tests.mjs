@@ -7,7 +7,7 @@ import { emptyLedger, addAccount, addTransaction, updateAccount } from '../ops.j
 import { buildGridRows } from '../grid.js';
 import { parseSheet, buildYear, emptyArchive, withYears } from '../archive.js';
 import {
-  exportColumns, earliestDate, buildExport, liveExportRows, exportWorkbook, blockFields, tint, GREY, MAX_DATE,
+  exportColumns, earliestDate, hasDataIn, buildExport, liveExportRows, exportWorkbook, blockFields, tint, GREY, MAX_DATE,
 } from '../excel-export.js';
 import { writeWorkbook, crc32, columnName, safeSheetNames, zip } from '../xlsx-write.js';
 import { readWorkbook } from '../xlsx-read.js';
@@ -84,6 +84,15 @@ test('live accounts first; a same-named history account continues in the live co
   assert.equal(hx.id, 'arch:halifax');
   assert.deepEqual([hx.start, hx.end], ['2019-01-01', '2019-12-20']);
   assert.equal(earliestDate(columns), '2019-01-01');
+});
+test('v0.15.5: an account has a pill only when it has data in the dates', () => {
+  const { columns } = setup();
+  const names = (from, to) => columns.filter((c) => hasDataIn(c, from, to)).map((c) => c.name);
+  assert.deepEqual(names('2019-01-01', '2019-12-31'), ['Nationwide', 'Halifax']);
+  assert.deepEqual(names('2021-01-01', '2021-12-31'), ['Nationwide']); // Halifax closed in 2019
+  assert.deepEqual(names('2026-10-01', '2026-10-31'), ['Current Account', 'Nationwide', 'Joint']);
+  assert.deepEqual(names('2026-10-01', '2026-10-14'), ['Current Account', 'Nationwide']); // joint opens 15 Oct
+  assert.deepEqual(names('2019-12-20', '2019-12-20'), ['Nationwide', 'Halifax']); // its last day still counts
 });
 test('a closed (inactive) live account ends at its last entry', () => {
   const { l, joint } = live();

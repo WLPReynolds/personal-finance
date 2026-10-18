@@ -5,7 +5,7 @@
  * (rows and layout) and lib/xlsx-write.js (the file).
  */
 import { windowFrame } from './archive-ui.js';
-import { exportColumns, earliestDate, buildExport, exportWorkbook, exportFileName } from './lib/excel-export.js';
+import { exportColumns, earliestDate, hasDataIn, buildExport, exportWorkbook, exportFileName } from './lib/excel-export.js';
 import { writeWorkbook } from './lib/xlsx-write.js';
 
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -49,7 +49,7 @@ export function createExportUI(ctx) {
     const quick = (label, fn) => h('button', { type: 'button', class: 'btn-secondary btn-small', onclick: () => { fn(); render(); } }, label);
     const chips = h('div', { class: 'arch-chips', role: 'group', 'aria-label': 'Accounts' },
       columns.map((c) => h('button', {
-        type: 'button', class: 'arch-chip', 'aria-pressed': String(!state.off.has(c.id)), style: { '--acc': c.colour },
+        type: 'button', class: 'arch-chip', 'aria-pressed': String(!state.off.has(c.id)), style: { '--acc': c.colour }, dataset: { col: c.id },
         title: c.start ? `${c.name}: data from ${longDate(c.start)}${c.end < '9999' ? ` to ${longDate(c.end)}` : ''}` : `${c.name}: no data`,
         onclick: (e) => {
           if (state.off.has(c.id)) state.off.delete(c.id); else state.off.add(c.id);
@@ -70,8 +70,8 @@ export function createExportUI(ctx) {
       h('label', { class: 'check exp-proj' }, proj, ' Include projected entries (recurring items not confirmed yet)'),
       h('div', { class: 'btn-row' },
         h('h4', { class: 'exp-sub' }, 'Accounts'),
-        quick('All', () => state.off.clear()),
-        quick('None', () => { for (const c of columns) state.off.add(c.id); })),
+        quick('All', () => { for (const c of columns) if (shown(c)) state.off.delete(c.id); }),
+        quick('None', () => { for (const c of columns) if (shown(c)) state.off.add(c.id); })),
       chips,
       h('p', { class: 'small exp-summary' }),
       h('div', { class: 'btn-row' },
@@ -84,15 +84,20 @@ export function createExportUI(ctx) {
     if (!state.from || !state.to) return 'Choose both dates';
     if (state.from > state.to) return 'The From date is after the To date';
     if (state.to > ctx.maxDate()) return `The To date can be up to ${longDate(ctx.maxDate())}`;
+    if (!columns.some(shown)) return 'None of your accounts has any data in these dates';
     if (!chosen().length) return 'Choose at least one account';
     return null;
   }
-  const chosen = () => columns.filter((c) => !state.off.has(c.id)).map((c) => c.id);
+  /** v0.15.5: only accounts with data in the chosen dates get a pill (all of them while the dates are unfinished). */
+  const datesOk = () => Boolean(state.from && state.to && state.from <= state.to);
+  const shown = (c) => !datesOk() || hasDataIn(c, state.from, state.to);
+  const chosen = () => columns.filter((c) => shown(c) && !state.off.has(c.id)).map((c) => c.id);
 
   function draw() {
     const dlg = $('exportDialog');
     const summary = dlg.querySelector('.exp-summary');
     if (!summary) return;
+    for (const chip of dlg.querySelectorAll('.arch-chip')) chip.hidden = !shown(columns.find((c) => c.id === chip.dataset.col));
     const p = problem();
     const years = p ? 0 : Number(state.to.slice(0, 4)) - Number(state.from.slice(0, 4)) + 1;
     summary.className = `small exp-summary ${p ? 'warn' : ''}`;
