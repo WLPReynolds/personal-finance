@@ -4,7 +4,15 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.15.5 — Export pills only for accounts with data in the dates; v0.15.4 — Export to Excel; v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.15.6 — An open tab notices a newer version; v0.15.5 — Export pills only for accounts with data in the dates; v0.15.4 — Export to Excel; v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.15.6:** a tab left open (a desktop browser, mostly) now notices when a newer version has
+been deployed. When you come back to the tab (at most every 10 minutes), and every hour while it stays
+in view, the app asks GitHub Pages for `index.html` and compares its version stamp with the code it is
+running. If the deployed version is newer, a bar says **"A newer version (vX) is available — Tap to
+reload"**. It never reloads by itself, so an open dialog or a half-typed entry is safe. Offline, or
+when an older or cached page comes back, it says nothing. (The v0.13.2 bar for a half-arrived deploy
+is unchanged.)
 
 **v0.15.5:** in Export to Excel, only the accounts with data between the From and To dates get a
 pill (all of them while the dates are the wrong way round); a hidden pill's account is never exported.
@@ -598,7 +606,7 @@ npm test
 ```
 
 316 tests (incl. limits and loan accounts, older versions keeping newer fields (compat), joint account split/sync, page/code consistency checks, ticket purchases, envelopes, two-device sync + stress test, recurring items, card statements, reconciling, backups, passphrase lock), plain Node `assert`, no install needed.
-Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py`, `tickets_v013.py`, `stale_page_v0132.py`, `joint_v014.py`, `limits_v014.py`, `summary_v014.py`, `grid_header_v014.py` (and the others in `dev/e2e/`).
+Browser tests: `python3 dev/e2e/recurring.py`, `recurring_v06.py`, `statements_v07.py`, `every_days_v071.py`, `reconcile_v08.py`, `backups_v09.py`, `lock_v010.py`, `tracker_v011.py`, `envelopes_v012.py`, `tickets_v013.py`, `stale_page_v0132.py`, `joint_v014.py`, `limits_v014.py`, `summary_v014.py`, `grid_header_v014.py`, `update_check_v0156.py` (and the others in `dev/e2e/`).
 
 **New in v0.14.5** — Recurring item type "Move between envelopes": on an account that uses envelopes, shift a fixed amount from one envelope to another (or from/to Unallocated) every month, e.g. Chase: Bills → Savings on payday. It is projected ahead like any recurring item (tag "Bills → Savings £50.00"), you confirm it (or skip / change one month), and confirming makes the same move note as Move between envelopes… — the account's balance never changes. The weekend/bank-holiday rule is per item. **Update both devices before adding one:** v0.14.4 and older would read it as an ordinary payment out. Tests: `envelope-move-tests.mjs` (16), e2e `envelope_move_v0145.py` (28 checks).
 
