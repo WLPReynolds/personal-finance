@@ -63,7 +63,9 @@ import {
   isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
-export const APP_VERSION = '0.15.5';
+import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } from './lib/update-check.js';
+
+export const APP_VERSION = '0.15.6';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -3921,12 +3923,15 @@ sync.onChange(renderSyncChip);
 // Sync when returning to the app, and push when leaving it — both only with
 // a still-valid sign-in (never opens Google's window by itself).
 document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') checkForNewerVersion(); // v0.15.6
   if (document.visibilityState === 'visible' && lockIfIdle()) return;
   if (!state.ledger || (!sync.isEnabled() && !jointActive())) return;
   if (document.visibilityState === 'hidden') { clearTimeout(syncTimer); sync.sync(); runJointSync(); }
   else { renderSyncChip(); syncBoth(); }
 });
-setInterval(() => (sync.isEnabled() || jointActive()) && renderSyncChip(), 60 * 1000); // sign-in expiry / "Synced hh:mm" freshness
+setInterval(() => (sync.isEnabled() || jointActive()) && renderSyncChip(), 60 * 1000);
+// v0.15.6: and an hourly look for a newer deploy while the tab stays in view
+setInterval(() => document.visibilityState === 'visible' && checkForNewerVersion({ force: true }), UPDATE_CHECK_EVERY_MS); // sign-in expiry / "Synced hh:mm" freshness
 $('viewBtn').addEventListener('click', () => {
   state.viewMode = isGrid() ? 'list' : 'grid';
   writePref('viewMode', state.viewMode);
@@ -4214,11 +4219,39 @@ $('lockBtn').addEventListener('click', () => lockNow());
 function checkPageVersion() {
   const pageVersion = document.querySelector('meta[name="app-version"]')?.content?.trim();
   if (pageVersion === APP_VERSION) return;
+  showUpdateBanner('Finishing an update — this page is a version behind the app.');
+}
+
+/** The reload bar. Never reloads by itself, so an open dialog or edit is safe. */
+function showUpdateBanner(text) {
   if (document.getElementById('updateBanner')) return;
   const bar = h('div', { id: 'updateBanner', class: 'update-banner', role: 'alert' },
-    h('span', {}, 'Finishing an update — this page is a version behind the app.'),
+    h('span', {}, text),
     h('button', { type: 'button', class: 'btn-primary btn-small', onclick: () => location.reload() }, 'Tap to reload'));
   document.body.prepend(bar);
+}
+
+/**
+ * v0.15.6: a tab left open (desktop, mostly) keeps running the code it loaded.
+ * Ask the server for index.html now and then and compare its version stamp;
+ * if a newer version is deployed, offer the reload. Offline, or a cached or
+ * older page, says nothing (lib/update-check.js).
+ */
+let lastUpdateCheck = 0;
+async function checkForNewerVersion({ force = false } = {}) {
+  if (location.protocol === 'file:' || document.getElementById('updateBanner')) return;
+  if (navigator.onLine === false) return;
+  const now = Date.now();
+  if (!force && !dueForCheck(lastUpdateCheck, now)) return;
+  lastUpdateCheck = now;
+  try {
+    const res = await fetch('index.html', { cache: 'no-store' });
+    if (!res.ok) return;
+    const deployed = pageVersionFrom(await res.text());
+    if (isNewerVersion(deployed, APP_VERSION)) {
+      showUpdateBanner(`A newer version (v${deployed}) is available — you're on v${APP_VERSION}.`);
+    }
+  } catch { /* offline or blocked — try again next time */ }
 }
 
 async function start() {
