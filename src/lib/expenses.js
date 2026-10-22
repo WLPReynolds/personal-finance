@@ -12,7 +12,7 @@
  *     submittedAt / paidAt  ISO datetimes, or null
  *
  * Both fields are ordinary record fields, so they merge, sync and survive
- * older app versions like any other (compat-tests). Receipt photos are NOT
+ * older app versions like any other (compat-tests). Receipts (photos, PDFs) are NOT
  * here — they stay on the device (lib/photos.js) and never reach a synced file.
  *
  * Unticking an account hides its claims; nothing is deleted, and they come
@@ -135,6 +135,12 @@ export function claimSections(ledger, { accountId = null } = {}) {
   });
 }
 
+/** v0.15.9: claims not yet paid on one account — the phone header line shows only while there are some. */
+export function unpaidSummary(ledger, accountId) {
+  const [toClaim, submitted] = claimSections(ledger, { accountId });
+  return { toClaim, submitted, any: toClaim.count + submitted.count > 0 };
+}
+
 /**
  * "Add from recent entries": money-out entries on ticked accounts, not yet
  * expenses, dated in the last RECENT_DAYS days up to today. Newest first.
@@ -167,15 +173,16 @@ export function shareSummary(txs) {
   return blocks.join('\n\n');
 }
 
-/** A file name for a shared photo: date, a short description, a number. */
-export function photoFileName(tx, n, of) {
+/** A file name for a shared receipt: date, a short description, a number; .pdf for a PDF. */
+export function photoFileName(tx, n, of, ext = 'jpg') {
   const words = (tx.description || 'receipt').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'receipt';
-  return `${tx.date}-${words}${of > 1 ? `-${n}` : ''}.jpg`;
+  return `${tx.date}-${words}${of > 1 ? `-${n}` : ''}.${ext}`;
 }
+export const receiptFileName = photoFileName;
 
 /**
- * ⚙ "Delete photos of paid claims": what it would do, given this device's
- * photo list ([{ id, entryId, size }]). Paid claims only — even on an account
+ * ⚙ "Delete receipts of paid claims": what it would do, given this device's
+ * receipt list ([{ id, entryId, size }] — photos and PDFs alike). Paid claims only — even on an account
  * that's since been unticked — and nothing else.
  * @returns {{ kind: 'nonePaid'|'nothing'|'some', photoIds: string[], count: number, bytes: number, claims: number }}
  */
@@ -201,6 +208,6 @@ export function sizeText(bytes) {
 /** The message the clean-up shows (a confirm question for 'some'). */
 export function cleanupMessage(plan) {
   if (plan.kind === 'nonePaid') return 'No claims are marked as paid yet — mark them Paid in the claim list first.';
-  if (plan.kind === 'nothing') return 'Nothing to delete — none of the paid claims has a photo left on this device.';
-  return `Delete ${plan.count} photo${plan.count === 1 ? '' : 's'} (${sizeText(plan.bytes)}) of ${plan.claims} paid claim${plan.claims === 1 ? '' : 's'} from this device?\n\nThe claims themselves stay. Copies in your Photos app aren’t touched.`;
+  if (plan.kind === 'nothing') return 'Nothing to delete — none of the paid claims has a receipt left on this device.';
+  return `Delete ${plan.count} receipt${plan.count === 1 ? '' : 's'} (${sizeText(plan.bytes)}) of ${plan.claims} paid claim${plan.claims === 1 ? '' : 's'} from this device?\n\nThe claims themselves stay. Copies in your Photos or Files app aren’t touched.`;
 }
