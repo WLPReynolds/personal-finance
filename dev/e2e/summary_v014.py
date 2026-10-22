@@ -37,7 +37,7 @@ try:
         b = p.chromium.launch()
         ph, ctx = device(b, 390, 844, True)
         ph.wait_for_selector('.setup-form')
-        for el, v in zip(ph.query_selector_all('.setup-form .amount-input'), ['1500', '120', '2500']): el.fill(v)
+        fill_setup(ph, ['1500', '120', '2500'])
         ph.fill('.setup-form input[type=date]', '2026-10-01')
         ph.click('.setup-form button[type=submit]')
         ph.wait_for_selector('.summary', timeout=8000)
@@ -104,7 +104,7 @@ try:
         # dark + narrow
         dk, _ = device(b, 360, 780, True, 'dark')
         dk.wait_for_selector('.setup-form')
-        for el, v in zip(dk.query_selector_all('.setup-form .amount-input'), ['1500', '120', '2500']): el.fill(v)
+        fill_setup(dk, ['1500', '120', '2500'])
         dk.click('.setup-form button[type=submit]'); dk.wait_for_selector('.summary')
         sw = dk.evaluate('document.documentElement.scrollWidth')
         check('360px dark: no sideways scroll', sw <= 360, sw)
@@ -113,6 +113,7 @@ try:
         # desktop: grid as before
         desk, _ = device(b, 1440, 900, False)
         desk.wait_for_selector('.setup-form')
+        fill_setup(desk, ['0', '0', '0'])
         desk.click('.setup-form button[type=submit]')
         desk.wait_for_selector('table.grid')
         check('desktop opens on the grid as before (no Summary)', desk.locator('.summary').count() == 0)

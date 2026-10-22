@@ -4,7 +4,27 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.15.6 — An open tab notices a newer version; v0.15.5 — Export pills only for accounts with data in the dates; v0.15.4 — Export to Excel; v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.15.8 — Expense claims, neutral first-run setup, iPhone ≡ install step; v0.15.6 — An open tab notices a newer version; v0.15.5 — Export pills only for accounts with data in the dates; v0.15.4 — Export to Excel; v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.15.8: Expense claims** (design: Project doc `claude/expense-claims-design.md`)
+- ⚙ → Accounts → Edit → **Can have expense claims**. Only ticked accounts show anything new.
+- On a ticked account, a money-out entry has a **Business expense** tick: **Details** (free text),
+  **Claim amount** (blank = the whole entry; never more than it — lowering the entry pulls it down)
+  and optional **receipt photos** (camera or library, shrunk to ~1600 px JPEG). Works on an entry
+  added days earlier.
+- **Claim list** (the "🧾 Expense claims" line on the phone header, the 🧾 button on the grid
+  header, or ⚙ → Expense claims): To claim / Submitted / Paid, each with a count and total; tick to
+  move a claim on, untick to move it back; **Add from recent entries** (last 60 days) fills several in
+  turn; **Select to share** → the Share sheet with the photos and a text summary (or, where the
+  browser can't share files, the photos download and the text is copied).
+- Photos are kept **on this device only** (their own IndexedDB database, encrypted while the lock is
+  on), never in the ledger, Drive, backups or exports. ⚙ → **Delete photos of paid claims** removes
+  only Paid claims' photos, after saying how many and how much space. Deleting an entry, or unticking
+  Business expense, deletes its photos (it asks first).
+- `entry.expense` and `account.expenseClaims` are ordinary fields: they sync, merge and survive older
+  versions. Unticking an account hides its claims without deleting them.
+- First run: a neutral **Set up your accounts** (name, type, bank, balance; add as many as you like)
+  instead of the Budget-sheet three. iPhone install step 1 mentions the **≡** button in the address bar.
 
 **v0.15.6:** a tab left open (a desktop browser, mostly) now notices when a newer version has
 been deployed. When you come back to the tab (at most every 10 minutes), and every hour while it stays

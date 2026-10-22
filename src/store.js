@@ -14,7 +14,7 @@
  *   'archive' (v0.14.8: history imported from Budget.xlsx — read-only, never
  *   in the ledger or synced with it; see lib/archive.js)
  */
-import { encryptValue, decryptValue, isEncryptedValue } from './lib/vault.js';
+import { encryptValue, decryptValue, isEncryptedValue, toB64, fromB64 } from './lib/vault.js';
 
 const DB_NAME = 'finance-tracker';
 const STORE = 'kv';
@@ -137,6 +137,93 @@ export async function removeArchive() {
   return run;
 }
 
+// ---------------------------------------------------------------- v0.15.8 receipt photos
+// Expense-claim photos live in their OWN database, so the main one keeps its
+// version (an older app tab opening it is never upgraded under its feet) and
+// nothing here can end up in a ledger, a sync or an export. Two stores:
+// 'meta' (entry id, size — no picture) and 'data' (the picture: a Blob, or
+// encrypted while the passphrase lock is on). See lib/photos.js.
+const PHOTO_DB = 'finance-tracker-photos';
+let photoDbPromise = null;
+
+function openPhotoDb() {
+  if (!photoDbPromise) {
+    photoDbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(PHOTO_DB, 1);
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore('meta', { keyPath: 'id' });
+        req.result.createObjectStore('data');
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    photoDbPromise.catch(() => { photoDbPromise = null; });
+  }
+  return photoDbPromise;
+}
+
+function photoTx(stores, mode, fn) {
+  return openPhotoDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(stores, mode);
+    let result;
+    Promise.resolve(fn(tx, (r) => { result = r; })).catch(reject);
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error ?? new Error('Photo save aborted'));
+  }));
+}
+const reqP = (req) => new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+
+async function photoToStored(blob, id) {
+  if (!vaultKey) return blob;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return encryptValue(vaultKey, { type: blob.type || 'image/jpeg', b64: toB64(bytes) }, `photo:${id}`);
+}
+async function storedToPhoto(v, id) {
+  if (!v) return null;
+  if (!isEncryptedValue(v)) return v;
+  if (!vaultKey) throw new LockedError();
+  const { type, b64 } = await decryptValue(vaultKey, v, `photo:${id}`);
+  return new Blob([fromB64(b64)], { type });
+}
+
+/** The IndexedDB backend for lib/photos.js createPhotoLibrary(). */
+export const photoBackend = {
+  list: () => photoTx('meta', 'readonly', (tx, done) => reqP(tx.objectStore('meta').getAll()).then(done)),
+  async get(id) {
+    const v = await photoTx('data', 'readonly', (tx, done) => reqP(tx.objectStore('data').get(id)).then(done));
+    return storedToPhoto(v, id);
+  },
+  async put(meta, blob) {
+    if (!vaultKey && (await rawGet(VAULT))) throw new LockedError(); // never write plain while locked on
+    const stored = await photoToStored(blob, meta.id); // before the transaction: it would close while waiting
+    return photoTx(['meta', 'data'], 'readwrite', (tx) => {
+      tx.objectStore('meta').put(meta);
+      tx.objectStore('data').put(stored, meta.id);
+    });
+  },
+  remove: (ids) => photoTx(['meta', 'data'], 'readwrite', (tx) => {
+    for (const id of ids) { tx.objectStore('meta').delete(id); tx.objectStore('data').delete(id); }
+  }),
+};
+
+/**
+ * Re-save every photo plain (toKey null) or encrypted with the CURRENT key.
+ * Called by rekeyAll in the order that never leaves a photo unreadable:
+ * decrypted before the lock goes off, encrypted only after it's on.
+ */
+async function rekeyPhotos(encrypt) {
+  let ids;
+  try { ids = (await photoBackend.list()).map((m) => m.id); } catch { return; } // no photo database: nothing to do
+  for (const id of ids) {
+    const v = await photoTx('data', 'readonly', (tx, done) => reqP(tx.objectStore('data').get(id)).then(done));
+    if (!v || isEncryptedValue(v) === encrypt) continue;
+    const blob = await storedToPhoto(v, id);
+    const stored = encrypt ? await photoToStored(blob, id) : blob;
+    await photoTx('data', 'readwrite', (tx) => { tx.objectStore('data').put(stored, id); });
+  }
+}
+
 export const loadVaultHeader = () => rawGet(VAULT);
 
 /** Wait for saves already started (before locking). */
@@ -157,6 +244,7 @@ export function saveVaultHeader(header) {
  */
 export function rekeyAll(header, key) {
   const run = writeChain.then(async () => {
+    if (!key) await rekeyPhotos(false); // v0.15.8: photos back to plain while the old key still works
     const entries = [];
     for (const k of DATA_KEYS) {
       const v = await get(k); // decrypts with the current key
@@ -166,6 +254,7 @@ export function rekeyAll(header, key) {
     entries.push([VAULT, header ?? undefined]);
     await rawPutMany(entries);
     vaultKey = key ?? null;
+    if (key) await rekeyPhotos(true); // v0.15.8: photos encrypted once the lock is safely on
   });
   writeChain = run.catch(() => {});
   return run;
@@ -183,6 +272,14 @@ export async function wipeDevice() {
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
     req.onblocked = () => resolve(); // another tab has it open; it goes when that closes
+  });
+  // v0.15.8: receipt photos go too
+  const pdb = await photoDbPromise?.catch(() => null);
+  pdb?.close();
+  photoDbPromise = null;
+  await new Promise((resolve) => {
+    const req = indexedDB.deleteDatabase(PHOTO_DB);
+    req.onsuccess = req.onerror = req.onblocked = () => resolve();
   });
 }
 
