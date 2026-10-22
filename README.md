@@ -4,7 +4,15 @@ Personal finance PWA — replaces the Budget/Monzo Pots/Holiday Spends spreadshe
 Same pattern as the ticket tracker: static PWA on GitHub Pages, deployed
 manually via the GitHub web UI, zero npm dependencies.
 
-## Status: v0.15.8 — Expense claims, neutral first-run setup, iPhone ≡ install step; v0.15.6 — An open tab notices a newer version; v0.15.5 — Export pills only for accounts with data in the dates; v0.15.4 — Export to Excel; v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+## Status: v0.15.9 — PDF receipts, line icons; v0.15.8 — Expense claims, neutral first-run setup, iPhone ≡ install step; v0.15.6 — An open tab notices a newer version; v0.15.5 — Export pills only for accounts with data in the dates; v0.15.4 — Export to Excel; v0.15.3 — Weekly and Fortnightly repeats; v0.15.2 — Find shows only the account pills with a match; v0.15.1 — History search shows only accounts with a match; v0.15.0 — Find: history + live in one search; v0.14.10: history search from 3 letters; v0.14.9: history window; v0.14.8: history imported from Excel (read only); v0.14.6: ring-fenced money back fix, grid order
+
+**v0.15.9:** receipts can be **PDFs** as well as photos (iPhone: Choose File opens the Files app).
+PDFs are kept as they are, up to 10 MB each, shown as a document tile with the file name; tapping a
+receipt opens it; they share and download as `date-description.pdf`. The 🧾 / 📷 emoji are replaced by
+line icons in the ticket tracker's style (its receipt icon, and a paperclip with the count). "Photos"
+is now "receipts" throughout — ⚙ **Delete receipts of paid claims**. The phone header's Expense claims
+line shows only while claims are unpaid (to claim or submitted). Fixed: photo previews in an entry
+showed as broken images.
 
 **v0.15.8: Expense claims** (design: Project doc `claude/expense-claims-design.md`)
 - ⚙ → Accounts → Edit → **Can have expense claims**. Only ticked accounts show anything new.

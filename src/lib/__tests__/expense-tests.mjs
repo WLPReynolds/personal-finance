@@ -5,9 +5,9 @@ import assert from 'node:assert/strict';
 import { emptyLedger, addAccount, addTransaction, updateTransaction, updateAccount, deleteTransaction } from '../ops.js';
 import {
   claimsOn, isExpense, setExpense, setClaimStatus, nextStatus, previousStatus, claimSections, recentCandidates,
-  shareSummary, photoFileName, cleanupPlan, cleanupMessage, fitExpense,
+  shareSummary, photoFileName, cleanupPlan, cleanupMessage, fitExpense, unpaidSummary, receiptFileName,
 } from '../expenses.js';
-import { createPhotoLibrary, memoryPhotoBackend, fitWithin } from '../photos.js';
+import { createPhotoLibrary, memoryPhotoBackend, fitWithin, isPdf, pdfProblem, MAX_PDF_BYTES, PDF_TYPE } from '../photos.js';
 import { mergeLedger } from '../merge.js';
 import { prepareMerge, repairLedger, fingerprint } from '../sync-core.js';
 import { buildExport, parseImport } from '../transfer-file.js';
@@ -267,7 +267,7 @@ test('clean-up messages: none paid / nothing to delete / n photos', () => {
   assert.equal(nothing.kind, 'nothing');
   assert.match(cleanupMessage(nothing), /Nothing to delete/);
   const some = cleanupPlan(l, [{ id: 'p1', entryId: s.fuel, size: 2 * 1024 * 1024 }, { id: 'p2', entryId: s.fuel, size: 512 * 1024 }]);
-  assert.match(cleanupMessage(some), /^Delete 2 photos \(2\.5 MB\) of 1 paid claim from this device\?/);
+  assert.match(cleanupMessage(some), /^Delete 2 receipts \(2\.5 MB\) of 1 paid claim from this device\?/);
 });
 
 test('nothing about photos is written to any synced file', async () => {
@@ -300,6 +300,63 @@ test('shrinking: long side to 1600 px, shape kept, small pictures untouched', ()
   assert.deepEqual(fitWithin(4032, 3024), { width: 1600, height: 1200 });
   assert.deepEqual(fitWithin(3024, 4032), { width: 1200, height: 1600 });
   assert.deepEqual(fitWithin(800, 600), { width: 800, height: 600 });
+});
+
+// ------------------------------------------------------------ v0.15.9
+console.log('v0.15.9: PDF receipts and the header line');
+
+test('a PDF is a receipt like a photo: kept as it is, with its type and name', async () => {
+  const s = setup();
+  const lib = createPhotoLibrary(memoryPhotoBackend());
+  const pdf = await lib.add(s.fuel, { size: 80000, type: PDF_TYPE }, undefined, 'Shell receipt.pdf');
+  const jpg = await lib.add(s.fuel, blob(200000));
+  assert.deepEqual([pdf.type, pdf.name], [PDF_TYPE, 'Shell receipt.pdf']);
+  assert.equal(jpg.type, 'image/jpeg');
+  assert.equal('name' in jpg, false);
+  assert.equal((await lib.forEntry(s.fuel)).length, 2);
+  // a picker that leaves the type blank: the name decides
+  const blank = await lib.add(s.hotel, { size: 10, type: '' }, undefined, 'invoice.PDF');
+  assert.equal(blank.type, PDF_TYPE);
+});
+
+test('PDF checks: by type or .pdf name; over 10 MB or empty is refused', () => {
+  assert.equal(isPdf({ type: PDF_TYPE, name: 'x' }), true);
+  assert.equal(isPdf({ type: '', name: 'Receipt.pdf' }), true);
+  assert.equal(isPdf({ type: 'image/jpeg', name: 'photo.jpg' }), false);
+  assert.equal(pdfProblem({ name: 'a.pdf', size: 5000 }), null);
+  assert.match(pdfProblem({ name: 'big.pdf', size: MAX_PDF_BYTES + 1 }), /over 10 MB/);
+  assert.match(pdfProblem({ name: 'e.pdf', size: 0 }), /empty/);
+});
+
+test('clean-up counts PDFs too (paid claims only)', async () => {
+  const s = setup();
+  const lib = createPhotoLibrary(memoryPhotoBackend());
+  let l = setExpense(s.ledger, s.fuel, {});
+  await lib.add(s.fuel, { size: 1024 * 1024, type: PDF_TYPE }, undefined, 'a.pdf');
+  await lib.add(s.fuel, blob(1024 * 1024));
+  l = setClaimStatus(l, [s.fuel], 'paid');
+  const plan = await lib.cleanupPlan(l);
+  assert.deepEqual([plan.kind, plan.count], ['some', 2]);
+  assert.match(cleanupMessage(plan), /^Delete 2 receipts \(2\.0 MB\)/);
+});
+
+test('shared file names: .pdf for a PDF, .jpg for a photo', () => {
+  const s = setup();
+  const t = txOf(s.ledger, s.fuel);
+  assert.equal(receiptFileName(t, 1, 2, 'pdf'), '2026-10-13-Fuel-1.pdf');
+  assert.equal(photoFileName(t, 1, 1), '2026-10-13-Fuel.jpg');
+});
+
+test('header line only while claims are unpaid (to claim or submitted)', () => {
+  const s = setup();
+  let l = setExpense(s.ledger, s.fuel, {});
+  assert.equal(unpaidSummary(l, s.mbna.id).any, true);
+  l = setClaimStatus(l, [s.fuel], 'submitted');
+  const sub = unpaidSummary(l, s.mbna.id);
+  assert.deepEqual([sub.any, sub.toClaim.count, sub.submitted.count, sub.submitted.total], [true, 0, 1, 2350]);
+  l = setClaimStatus(l, [s.fuel], 'paid');
+  assert.equal(unpaidSummary(l, s.mbna.id).any, false);
+  assert.equal(unpaidSummary(s.ledger, s.mbna.id).any, false); // no claims at all
 });
 
 for (const [name, fn] of queue) {

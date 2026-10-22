@@ -70,7 +70,7 @@ import {
 import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } from './lib/update-check.js';
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 
-export const APP_VERSION = '0.15.8';
+export const APP_VERSION = '0.15.9';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -3405,7 +3405,7 @@ function openAccountDialog(accountId) {
   envSettings.el,
   h('div', { class: 'field' },
     h('label', { class: 'check' }, claimsBox, h('span', {}, 'Can have expense claims')),
-    h('span', { class: 'muted small' }, 'Lets you mark entries as business expenses, with details and receipt photos, and keep a list of what’s still to claim back.')),
+    h('span', { class: 'muted small' }, 'Lets you mark entries as business expenses, with details and receipts (photos or PDFs), and keep a list of what’s still to claim back.')),
   existing ? h('label', { class: 'check' }, hidden, h('span', {}, 'Hide this account (keeps its history)')) : null,
   h('div', { class: 'sheet-actions' },
     existing && !isJoint ? h('button', {
@@ -3672,7 +3672,7 @@ function renderSettings() {
           await removeJointData();
           state.joint = null;
           await archiveUI.eraseLocal(); // v0.14.8: the imported history too (its Drive files are untouched)
-          await expensesUI.eraseLocal(); // v0.15.8: and the receipt photos
+          await expensesUI.eraseLocal(); // v0.15.8: and the receipts
           state.meta = {};
           await saveMeta(state.meta);
           dlg.close();
