@@ -919,3 +919,17 @@ dialog.sheet-wide { height: 94dvh; }
 .exp-body p { margin: 0; }
 .exp-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .exp-sub { margin: 0; align-self: center; }
+
+/* ---- v0.15.7: iPhone install hint */
+.install-hint {
+  position: sticky; top: 0; z-index: 80; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px;
+  padding: 10px 16px; background: var(--warn-bg); color: var(--warn-text); font-weight: 600; font-size: 14px; text-align: center;
+}
+.install-hint-actions { display: inline-flex; gap: 8px; }
+.install-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.install-step { display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; }
+.install-step-n {
+  flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--primary); color: #fff; font-weight: 700; font-size: 14px;
+}
+.share-icon { vertical-align: -3px; color: var(--primary); }

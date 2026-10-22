@@ -5,7 +5,7 @@
  * phone still on the old version" problem. Bump VERSION on each deploy
  * anyway so old caches get cleaned up.
  */
-const VERSION = '0.15.6';
+const VERSION = '0.15.7';
 const CACHE = `finance-tracker-${VERSION}`;
 const SHELL = [
   './',
@@ -51,6 +51,7 @@ const SHELL = [
   'src/lib/excel-export.js',
   'src/lib/xlsx-write.js',
   'src/lib/update-check.js',
+  'src/lib/install-hint.js',
 ];
 
 self.addEventListener('install', (event) => {

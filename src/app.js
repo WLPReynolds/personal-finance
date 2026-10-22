@@ -64,8 +64,9 @@ import {
 } from './lib/tickets.js';
 
 import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } from './lib/update-check.js';
+import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 
-export const APP_VERSION = '0.15.6';
+export const APP_VERSION = '0.15.7';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -968,7 +969,8 @@ function render() {
   }
   // With Drive sync on, the sync chip shows unsynced changes instead
   $('unexportedDot').hidden = sync.isEnabled() || !hasUnexported();
-  $('installBtn').hidden = !state.installPrompt;
+  $('installBtn').hidden = !state.installPrompt && !iosNeedsInstall();
+  renderInstallHint();
 
   if (!state.personal.accounts.length) {
     $('fab').hidden = true;
@@ -3962,12 +3964,73 @@ window.addEventListener('beforeinstallprompt', (e) => {
 });
 $('installBtn').addEventListener('click', async () => {
   const p = state.installPrompt;
-  if (!p) return;
+  if (!p) { if (iosNeedsInstall()) openInstallDialog(); return; }
   state.installPrompt = null;
   p.prompt();
   await p.userChoice.catch(() => null);
   render();
 });
+
+// ------------------------------------------------------------------ v0.15.7 iPhone install hint
+// iOS has no install prompt, so the app explains Share → Add to Home Screen.
+// The Home Screen app keeps its own storage, separate from Safari, so the
+// banner asks for this before any data goes in (lib/install-hint.js).
+
+function iosNeedsInstall() {
+  return iosInstallState({
+    userAgent: navigator.userAgent,
+    maxTouchPoints: navigator.maxTouchPoints,
+    standalone: navigator.standalone,
+    displayModeStandalone: matchMedia('(display-mode: standalone)').matches,
+  }) === 'needs-install';
+}
+
+function shareIconEl() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '18'); svg.setAttribute('height', '18');
+  svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('class', 'share-icon');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('fill', 'none'); path.setAttribute('stroke', 'currentColor'); path.setAttribute('stroke-width', '2');
+  path.setAttribute('stroke-linecap', 'round'); path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('d', 'M12 3v12M8 7l4-4 4 4M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1');
+  svg.append(path);
+  return svg;
+}
+
+function renderInstallHint() {
+  const existing = document.getElementById('installHint');
+  const show = iosNeedsInstall() && hintBannerDue(readPref('installHintDismissed', ''));
+  if (!show) { existing?.remove(); return; }
+  if (existing) return;
+  const bar = h('div', { id: 'installHint', class: 'install-hint', role: 'note' },
+    h('span', {}, 'Add this app to your Home Screen before you start — anything entered in Safari stays in Safari.'),
+    h('span', { class: 'install-hint-actions' },
+      h('button', { type: 'button', class: 'btn-primary btn-small', onclick: () => openInstallDialog() }, 'Show me how'),
+      h('button', {
+        type: 'button', class: 'btn-ghost btn-small', 'aria-label': 'Not now',
+        onclick: () => { writePref('installHintDismissed', String(Date.now())); renderInstallHint(); },
+      }, 'Not now')));
+  document.querySelector('.topbar')?.after(bar);
+}
+
+function openInstallDialog() {
+  const dlg = $('installDialog');
+  const step = (n, ...text) => h('li', { class: 'install-step' }, h('span', { class: 'install-step-n' }, String(n)), h('span', {}, ...text));
+  dlg.replaceChildren(h('div', { class: 'sheet-body' },
+    h('header', { class: 'sheet-head' },
+      h('h2', {}, 'Install on your iPhone'),
+      h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
+    h('ol', { class: 'install-steps' },
+      step(1, 'Tap the ', h('strong', {}, 'Share'), ' button ', shareIconEl(), ' — at the bottom of Safari, or in the ', h('strong', {}, '⋯'), ' menu.'),
+      step(2, 'Scroll down and tap ', h('strong', {}, 'Add to Home Screen'), '.'),
+      step(3, 'Tap ', h('strong', {}, 'Add'), ', then open ', h('strong', {}, 'Finance'), ' from your Home Screen.')),
+    h('p', { class: 'muted small' }, 'Use the Home Screen app from then on. It keeps its own data, separate from Safari, and the iPhone won’t clear it the way it can clear websites you haven’t visited for a while.'),
+    h('p', { class: 'muted small' }, 'No Share button? The link may have opened inside another app — open it in Safari first.'),
+    h('div', { class: 'sheet-actions' },
+      h('span', {}),
+      h('button', { type: 'button', class: 'btn-primary', onclick: () => dlg.close() }, 'Got it'))));
+  openDialog(dlg);
+}
 
 // ------------------------------------------------------------------ v0.10 passphrase lock
 // Desktop only in practice: it's off unless turned on in ⚙ on this device,
