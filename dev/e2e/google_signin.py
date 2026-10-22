@@ -20,7 +20,7 @@ try:
         pg.on('pageerror', lambda e: errors.append(str(e)))
         pg.on('dialog', lambda d: d.accept())
         pg.goto(URL); pg.wait_for_selector('.setup-form')
-        for el, v in zip(pg.query_selector_all('.setup-form .amount-input'), ['3600', '6', '1000']): el.fill(v)
+        fill_setup(pg, ['3600', '6', '1000'])
         pg.click('.setup-form button[type=submit]'); pg.wait_for_selector('.feed')
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
         # failure path first: window closed

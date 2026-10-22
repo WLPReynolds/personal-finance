@@ -9,6 +9,7 @@ import {
   loadVaultHeader, saveVaultHeader, setVaultKey, rekeyAll, wipeDevice, flushWrites, loadAuthCache, saveAuthCache,
   loadTrackerEstimates, saveTrackerEstimates,
   loadJointLedger, saveJointLedger, loadJointSyncState, saveJointSyncState, loadJointSettings, saveJointSettings, removeJointData,
+  photoBackend,
 } from './store.js';
 import {
   createVault, unlockVault, changePassphrase, passphraseProblem, isVaultHeader, AUTO_LOCK_CHOICES, DEFAULT_AUTO_LOCK, MIN_PASSPHRASE_LENGTH,
@@ -21,6 +22,9 @@ import { createArchiveUI, flashInto } from './archive-ui.js';
 import { createFinderUI } from './finder-ui.js';
 import { createExportUI } from './export-ui.js';
 import { liveExportRows } from './lib/excel-export.js';
+import { createExpensesUI } from './expenses-ui.js';
+import { createPhotoLibrary, memoryPhotoBackend } from './lib/photos.js';
+import { claimsOn } from './lib/expenses.js';
 import { archiveLinks, linkDecisions, setArchiveLinks } from './lib/finder.js';
 import {
   JOINT_FOLDER_NAME, JOINT_FILE_NAME, emptyJointLedger, isJointLedger, addJointAccount, combineLedgers, splitLedger,
@@ -66,7 +70,7 @@ import {
 import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } from './lib/update-check.js';
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 
-export const APP_VERSION = '0.15.7';
+export const APP_VERSION = '0.15.8';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -537,6 +541,20 @@ const exportUI = createExportUI({
   deliver: (file, name, share) => shareOrDownload(file, name, share, 'Personal Finance export'),
 });
 
+// ---- v0.15.8: expense claims (src/expenses-ui.js); photos on this device only (lib/photos.js)
+const expensesUI = createExpensesUI({
+  h, $, toast, openDialog, isOpen,
+  photos: createPhotoLibrary(typeof indexedDB === 'undefined' ? memoryPhotoBackend() : photoBackend),
+  ledger: () => state.ledger,
+  accountById: (id) => accountById(id),
+  commit: (next, message) => commit(next, message),
+  openTxDialog: (opts) => openTxDialog(opts),
+  formatPence, parseAmount, penceToInput, shortDate, longDate,
+  today: () => todayIso(),
+  downloadBlob: (blob, name) => downloadBlob(blob, name),
+  afterCleanup: () => { if (isOpen('settingsDialog')) renderSettings(); },
+});
+
 /** Every live account's rows up to `to`, worded as the grid words them, for the Excel export. */
 function exportLiveRows(to, projected) {
   const base = projected ? withProjections(state.ledger, to, state.holidays, sources()) : state.ledger;
@@ -942,6 +960,7 @@ async function commitParts({ personal = null, joint = null }, message) {
   for (const step of [
     () => render(),
     () => { if (isOpen('envelopeDialog')) renderEnvelopeDialog(); },
+    () => expensesUI.refresh(), // v0.15.8: the claim list, if open
     () => renderSyncChip(),
   ]) {
     try { step(); } catch (err) { screenError ??= err; console.error(err); }
@@ -1007,30 +1026,63 @@ function render() {
 // ---- setup (first run)
 
 function renderSetup() {
+  // v0.15.8: a neutral start — no names or banks filled in. Add as many accounts as you like.
   const date = h('input', { type: 'date', value: firstOfMonthIso(), required: true });
-  const rows = [
-    { name: 'Current Account', type: 'current', institution: 'other', label: 'Balance' },
-    { name: 'Nationwide', type: 'credit', institution: 'nationwide', label: 'Amount owed' },
-    { name: 'Barclaycard', type: 'credit', institution: 'barclaycard', label: 'Amount owed' },
-  ].map((r) => ({ ...r, input: h('input', { type: 'text', inputmode: 'decimal', placeholder: '0.00', class: 'amount-input' }) }));
+  const TYPES = [['current', 'Current account'], ['savings', 'Savings'], ['credit', 'Credit card'], ['loan', 'Loan / credit account']];
+  const rows = [];
+  const list = h('div', { class: 'setup-accounts' });
+  function addRow() {
+    const name = h('input', { type: 'text', autocomplete: 'off', placeholder: rows.length ? 'e.g. Credit card' : 'e.g. Current account' });
+    const type = h('select', {}, TYPES.map(([v, l]) => h('option', { value: v }, l)));
+    const inst = h('select', {}, Object.entries(INSTITUTIONS).filter(([k]) => k !== 'joint').map(([k, v]) => h('option', { value: k, selected: k === 'other' }, v.label)));
+    const amount = h('input', { type: 'text', inputmode: 'decimal', placeholder: '0.00', class: 'amount-input' });
+    const amountLabel = h('span', {});
+    const syncType = () => { amountLabel.textContent = type.value === 'credit' || type.value === 'loan' ? 'Amount owed (£)' : 'Balance (£)'; };
+    type.addEventListener('change', syncType);
+    syncType();
+    const row = { name, type, inst, amount };
+    const card = h('div', { class: 'setup-account' },
+      h('label', { class: 'field' }, h('span', {}, `Account ${rows.length + 1} — name`), name),
+      h('div', { class: 'field-pair' },
+        h('label', { class: 'field' }, h('span', {}, 'Type'), type),
+        h('label', { class: 'field' }, h('span', {}, 'Colour (bank)'), inst)),
+      h('label', { class: 'field field-row' }, amountLabel, amount),
+      rows.length ? h('button', { type: 'button', class: 'btn-link small', onclick: () => { rows.splice(rows.indexOf(row), 1); card.remove(); } }, 'Remove') : null);
+    rows.push(row);
+    list.append(card);
+    return name;
+  }
+  addRow();
 
   const form = h('form', {
     class: 'card setup-form',
     onsubmit: (e) => {
       e.preventDefault();
+      const used = rows.filter((r) => r.name.value.trim() || r.amount.value.trim());
+      if (!used.length) return toast('Give your first account a name', 'error');
       let ledger = emptyLedger();
-      for (const r of rows) {
-        const pence = r.input.value.trim() === '' ? 0 : parseAmount(r.input.value);
-        if (pence === null) return toast(`Check the amount for ${r.name}`, 'error');
-        ledger = addAccount(ledger, { name: r.name, type: r.type, institution: r.institution, openingBalance: pence, openingDate: date.value }).ledger;
+      for (const r of used) {
+        if (!r.name.value.trim()) return toast('Every account needs a name', 'error');
+        const raw = r.amount.value.trim();
+        const negative = raw.startsWith('-');
+        const pence = raw === '' ? 0 : parseAmount(negative ? raw.slice(1) : raw);
+        if (pence === null) return toast(`Check the amount for ${r.name.value.trim()}`, 'error');
+        const typed = negative ? -pence : pence;
+        const res = attempt(() => addAccount(ledger, {
+          name: r.name.value, type: r.type.value, institution: r.inst.value,
+          openingBalance: r.type.value === 'loan' ? -typed : typed, openingDate: date.value,
+        }));
+        if (!res) return;
+        ledger = res.ledger;
       }
-      commitParts({ personal: ledger }, 'Accounts created'); // first run: always your own file
+      commitParts({ personal: ledger }, used.length === 1 ? 'Account created' : 'Accounts created'); // first run: always your own file
     },
   },
-  h('h2', {}, 'Quick start'),
-  h('p', { class: 'muted' }, 'The three columns from your Budget sheet. Enter the balances as they stood at the start of the opening date, then backfill entries from there. Names, colours and types can be changed later in settings.'),
+  h('h2', {}, 'Set up your accounts'),
+  h('p', { class: 'muted' }, 'Add the accounts you want to keep track of, with each balance as it stood at the start of the opening date — then add entries from there. Everything can be changed later in settings, and you can add more accounts at any time.'),
   h('label', { class: 'field' }, h('span', {}, 'Opening date (“brought forward”)'), date),
-  ...rows.map((r) => h('label', { class: 'field field-row' }, h('span', {}, `${r.name} — ${r.label}`), r.input)),
+  list,
+  h('button', { type: 'button', class: 'btn-secondary', onclick: () => addRow().focus() }, '+ Add another account'),
   h('button', { type: 'submit', class: 'btn-primary' }, 'Create accounts'));
 
   app.replaceChildren(
@@ -1040,7 +1092,7 @@ function renderSetup() {
         h('h2', {}, 'Already set up on another device?'),
         h('p', { class: 'muted' }, 'Import the export file you made there.'),
         h('button', { type: 'button', class: 'btn-secondary', onclick: () => $('importInput').click() }, 'Import export file…')),
-      h('p', { class: 'muted small center' }, h('button', { type: 'button', class: 'btn-link', onclick: () => openAccountDialog(null) }, 'Or set up accounts one at a time'))));
+      h('p', { class: 'muted small center' }, h('button', { type: 'button', class: 'btn-link', onclick: () => openAccountDialog(null) }, 'Or set up accounts one at a time, with all the options'))));
 }
 
 // ---- mobile list
@@ -1117,7 +1169,8 @@ function bannerCard(active, view, today, { summary = false } = {}) {
   // Account's own page banner: structured with a top row (balance + eom/buttons)
   // and an animated drawer for extra details (limits, statements, envelopes)
   // so the sticky collapse transition on scroll is completely smooth.
-  const hasDrawer = Boolean(limEl || stmtEl || envEl);
+  const claimsEl = expensesUI.bannerLine(active); // v0.15.8
+  const hasDrawer = Boolean(limEl || stmtEl || envEl || claimsEl);
   return h('section', {
     class: 'banner', style: { '--acc': style.colour, '--ink': style.ink },
   },
@@ -1131,7 +1184,7 @@ function bannerCard(active, view, today, { summary = false } = {}) {
           h('button', { type: 'button', class: 'banner-edit', onclick: () => openAccountDialog(active.id) }, 'Account…'),
           h('button', { type: 'button', class: 'banner-edit banner-rec', onclick: () => openReconcileDialog(active.id) }, 'Reconcile…')),
         h('div', { class: 'banner-eom' }, `${showsOwed(active) ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${monthYearLabel(eomIso)}`))),
-    hasDrawer ? h('div', { class: 'banner-drawer' }, limEl, stmtEl, envEl) : null);
+    hasDrawer ? h('div', { class: 'banner-drawer' }, limEl, stmtEl, claimsEl, envEl) : null);
 }
 
 /** v0.14 phone landing page: every visible account's header card. */
@@ -1296,6 +1349,7 @@ function renderList(accounts) {
       },
         h('span', { class: 'entry-main' },
           h('span', { class: 'entry-desc' }, p ? h('span', { class: 'rec-icon', 'aria-label': p.itemId ? 'Recurring' : 'Ticket purchases' }, p.itemId ? '↻ ' : p.kind === 'ticketReturn' ? '🔒 ' : '🎟 ') : null,
+            p ? null : expensesUI.rowMark(t, active),
             h('span', { class: 'desc-text' }, t.description || '(no description)'),
             t.seriesNo ? h('span', { class: 'series-no' }, numberLabel(t.seriesNo)) : null),
           otherAcc || tags || t.stmtTag || env ? h('span', { class: 'entry-link' },
@@ -1400,6 +1454,7 @@ function renderGrid(accounts) {
         h('div', { class: 'acc-title' },
           h('button', { type: 'button', class: 'btn-link acc-name', title: 'Edit account', onclick: () => openAccountDialog(a.id) }, s.icon === 'people' ? peopleIcon(14) : null, a.name),
           h('span', { class: 'acc-btns' },
+            expensesUI.headerButton(a, 'acc-rec acc-claims'),
             h('button', { type: 'button', class: 'acc-rec', title: `Reconcile ${a.name}`, 'aria-label': `Reconcile ${a.name}`, onclick: () => openReconcileDialog(a.id) }, '✓'),
             h('button', { type: 'button', class: 'acc-add', title: `Add entry to ${a.name}`, onclick: () => openTxDialog({ accountId: a.id }) }, '+'))),
         h('div', { class: `acc-total ${todayBal < 0 ? 'neg' : ''}` }, `${showsOwed(a) ? 'Owed ' : ''}${formatPence(todayBal)}`),
@@ -1453,6 +1508,15 @@ function renderGrid(accounts) {
     const tags = p ? projectionTags(p, today) : alert ? { cls: 'alert', label: ALERT_MISSING } : null;
     const openRow = () => (p ? openProjection(p) : openTxDialog({ txId: row.txIds[0] }));
     const env = rowEnvTag(row);
+    const claimMark = p ? null : (() => { // v0.15.8
+      for (const a of accounts) {
+        const c = row.cells[a.id];
+        const tx = c?.txId && claimsOn(a) ? state.ledger.transactions.find((t) => t.id === c.txId) : null;
+        const m = tx ? expensesUI.rowMark(tx, a) : null;
+        if (m) return m;
+      }
+      return null;
+    })();
     const tr = h('tr', {
       class: `${monthStart} ${row.kind === 'note' ? 'row-note' : ''} ${future ? 'future' : ''} ${row.date === today ? 'is-today' : ''} ${p ? 'projected' : ''} ${tags?.cls ?? ''}`,
       dataset: { date: row.date, rowId: row.id }, // v0.15: Find jumps here
@@ -1460,7 +1524,7 @@ function renderGrid(accounts) {
       h('td', { class: 'sticky-l c-date clickable', onclick: openRow }, shortDate(row.date)),
       h('td', { class: 'sticky-l2 c-desc clickable', title: `${row.description}${row.seriesNo ? ` ${numberLabel(row.seriesNo)}` : ''}${p ? ` — ${tags.label}` : ''}`, onclick: openRow },
         p ? h('span', { class: 'rec-icon', title: `${p.itemId ? 'Recurring' : 'Ticket purchases'} — ${tags.label}` }, p.itemId ? '↻ ' : p.kind === 'ticketReturn' ? '🔒 ' : '🎟 ') : null,
-        row.isTransfer ? h('span', { class: 'link-icon', title: 'Linked transfer' }, '⇄ ') : null, row.description,
+        row.isTransfer ? h('span', { class: 'link-icon', title: 'Linked transfer' }, '⇄ ') : null, claimMark, row.description,
         row.seriesNo ? h('span', { class: 'series-no' }, ` ${numberLabel(row.seriesNo)}`) : null,
         row.stmtTag ? h('span', { class: 'stmt-tag' }, ` ${stmtTagText(row.stmtTag.tag, row.stmtTag.month, accountById(Object.keys(row.cells).find((id) => statementConfig(accountById(id)))) ?? accounts[0])}`) : null,
         env ? h('span', { class: `env-tag ${env.cls}` }, ` · ${env.text}`) : null,
@@ -1664,6 +1728,7 @@ function openTxDialog(opts) {
     updateCounterpartHint();
     syncStatement();
     syncEnvelope();
+    exp?.sync(kind);
   }
   function updateCounterpartHint() {
     const other = accountById(counterpartSelect.value);
@@ -1699,6 +1764,14 @@ function openTxDialog(opts) {
 
   const amountField = h('label', { class: 'field' }, h('span', {}, 'Amount (£)'), amount);
   const s = institutionStyle(account.institution);
+
+  // v0.15.8 expense claims: only on an account ticked "Can have expense claims"
+  const exp = claimsOn(account) ? expensesUI.entryFields({ account, existing, getAmount: () => parseAmount(amount.value), start: Boolean(opts.expenseStart) }) : null;
+  if (exp) amount.addEventListener('input', () => exp.sync());
+  let savedHere = false;
+  if (dlg.onCancelHook) dlg.removeEventListener('close', dlg.onCancelHook);
+  dlg.onCancelHook = opts.onCancel ? () => { dlg.onCancelHook = null; if (!savedHere) opts.onCancel(); } : null;
+  if (dlg.onCancelHook) dlg.addEventListener('close', dlg.onCancelHook, { once: true });
 
   // v0.13 ticket purchases: ring-fence a card spend (Transport envelope → Safe keeping), and notes on linked entries
   const tset = ticketSettings(state.ledger);
@@ -1761,6 +1834,15 @@ function openTxDialog(opts) {
           : wanted ? addRingFence(next, tset, id) : next));
         if (!next) return;
       }
+      // v0.15.8 the expense claim, on this entry only
+      const ownId = existing ? existing.id : next.transactions.find((t) => t.accountId === account.id && !state.ledger.transactions.some((o) => o.id === t.id))?.id;
+      let expResult = null;
+      if (exp && ownId) {
+        expResult = exp.apply(next, ownId);
+        if (expResult.cancelled) return;
+        if (expResult.error) return toast(expResult.error, 'error');
+        next = expResult.ledger;
+      }
       if (existing) {
         // a reconciled entry (or its other leg) whose amount/date/etc changes gets unticked — ask first
         const unticked = state.ledger.transactions.filter((t) => isReconciled(t) && next.transactions.some((n) => n.id === t.id && !isReconciled(n)));
@@ -1768,14 +1850,19 @@ function openTxDialog(opts) {
       }
       if (!limitsOK(next)) return; // v0.14: warn if it takes an account past a line
       if (!existing) state.activeAccountId = account.id;
+      savedHere = true;
       dlg.close();
-      commit(next, existing ? 'Updated' : 'Added');
+      commit(next, existing ? 'Updated' : 'Added').then(async () => {
+        if (exp && ownId) await exp.afterSave(ownId, { unmark: Boolean(expResult?.unmark) });
+        opts.onSaved?.();
+      });
     },
   },
   h('header', { class: 'sheet-head', style: { '--acc': s.colour } },
     swatch(account),
     h('h2', {}, `${existing ? 'Edit' : 'New'} entry · ${account.name}`),
     h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
+  opts.note ? h('div', { class: 'linked' }, opts.note) : null,
   seg,
   amountField,
   h('label', { class: 'field' }, h('span', {}, 'Description'), desc, datalist),
@@ -1783,6 +1870,7 @@ function openTxDialog(opts) {
   stmtField,
   counterpartField,
   picker.el,
+  exp?.el,
   rfField,
   recurringNote,
   ticketNote,
@@ -1797,7 +1885,7 @@ function openTxDialog(opts) {
         const next = fenced ? removeRingFence(deleteTransaction(state.ledger, existing.id), existing.id) : deleteTransaction(state.ledger, existing.id);
         if (!limitsOK(next)) return;
         dlg.close();
-        commit(next, 'Deleted');
+        commit(next, 'Deleted').then(() => expensesUI.entryDeleted(existing.id)); // v0.15.8: its photos too
       },
     }, 'Delete') : h('span'),
     h('button', { type: 'submit', class: 'btn-primary' }, existing ? 'Save' : 'Add')));
@@ -3195,6 +3283,7 @@ function openAccountDialog(accountId) {
   const openingLabel = h('span', {});
   const openingDate = h('input', { type: 'date', required: true, value: existing?.openingDate ?? firstOfMonthIso() });
   const hidden = h('input', { type: 'checkbox', checked: existing ? !existing.active : false });
+  const claimsBox = h('input', { type: 'checkbox', checked: claimsOn(existing) }); // v0.15.8
   const envSettings = envelopeSettings(existing); // v0.12
   envSettings.watchOpening(opening);
 
@@ -3279,6 +3368,9 @@ function openAccountDialog(accountId) {
         if (env.error) return toast(env.error, 'error');
         fields.envelopes = env.envelopes;
       }
+      // v0.15.8: absent = off; unticking keeps every claim (just hidden)
+      if (claimsBox.checked) fields.expenseClaims = true;
+      else if (existing && 'expenseClaims' in existing) fields.expenseClaims = false;
       let next;
       if (existing) next = attempt(() => updateAccount(state.ledger, existing.id, { ...fields, name: fields.name.trim(), active: !hidden.checked }));
       else {
@@ -3311,6 +3403,9 @@ function openAccountDialog(accountId) {
   creditLimitField,
   stmtSection,
   envSettings.el,
+  h('div', { class: 'field' },
+    h('label', { class: 'check' }, claimsBox, h('span', {}, 'Can have expense claims')),
+    h('span', { class: 'muted small' }, 'Lets you mark entries as business expenses, with details and receipt photos, and keep a list of what’s still to claim back.')),
   existing ? h('label', { class: 'check' }, hidden, h('span', {}, 'Hide this account (keeps its history)')) : null,
   h('div', { class: 'sheet-actions' },
     existing && !isJoint ? h('button', {
@@ -3527,6 +3622,8 @@ function renderSettings() {
 
     exportUI.settingsSection(),
 
+    expensesUI.settingsSection(),
+
     h('section', { class: 'settings-section' },
       h('h3', {}, 'Recurring items'),
       h('p', { class: 'muted small' }, (() => {
@@ -3575,6 +3672,7 @@ function renderSettings() {
           await removeJointData();
           state.joint = null;
           await archiveUI.eraseLocal(); // v0.14.8: the imported history too (its Drive files are untouched)
+          await expensesUI.eraseLocal(); // v0.15.8: and the receipt photos
           state.meta = {};
           await saveMeta(state.meta);
           dlg.close();
@@ -4021,7 +4119,7 @@ function openInstallDialog() {
       h('h2', {}, 'Install on your iPhone'),
       h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
     h('ol', { class: 'install-steps' },
-      step(1, 'Tap the ', h('strong', {}, 'Share'), ' button ', shareIconEl(), ' — at the bottom of Safari, or in the ', h('strong', {}, '⋯'), ' menu.'),
+      step(1, 'Tap the ', h('strong', {}, 'Share'), ' button ', shareIconEl(), ' at the bottom of Safari. Can’t see it? Tap the ', h('strong', {}, 'three lines (≡)'), ' button in the address bar — or ', h('strong', {}, '⋯'), ' — then ', h('strong', {}, 'Share'), '.'),
       step(2, 'Scroll down and tap ', h('strong', {}, 'Add to Home Screen'), '.'),
       step(3, 'Tap ', h('strong', {}, 'Add'), ', then open ', h('strong', {}, 'Finance'), ' from your Home Screen.')),
     h('p', { class: 'muted small' }, 'Use the Home Screen app from then on. It keeps its own data, separate from Safari, and the iPhone won’t clear it the way it can clear websites you haven’t visited for a while.'),

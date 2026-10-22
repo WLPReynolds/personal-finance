@@ -61,7 +61,7 @@ try:
         pg = ctx.new_page(); watch(pg, 'page')
         pg.clock.install(time=datetime.datetime(2026, 10, 6, 9, 0, 0))
         pg.goto(URL); pg.wait_for_selector('.setup-form')
-        for el, v in zip(pg.query_selector_all('.setup-form .amount-input'), ['3600', '6', '1000']): el.fill(v)
+        fill_setup(pg, ['3600', '6', '1000'])
         pg.click('.setup-form button[type=submit]'); pg.wait_for_selector('.feed')
         add_spend(pg, '12.34', 'Coffee beans')
 
@@ -189,7 +189,7 @@ try:
             c.add_init_script(GIS_STUB)
             q = c.new_page(); watch(q, scheme)
             q.goto(URL); q.wait_for_selector('.setup-form')
-            for el, v in zip(q.query_selector_all('.setup-form .amount-input'), ['3600', '6', '1000']): el.fill(v)
+            fill_setup(q, ['3600', '6', '1000'])
             q.click('.setup-form button[type=submit]'); q.wait_for_selector('.grid, .feed')
             open_settings(q)
             q.click('#settingsDialog button:has-text("Turn on passphrase lock")'); q.wait_for_selector('#lockDialog[open]')

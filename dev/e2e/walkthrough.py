@@ -47,9 +47,7 @@ try:
         pg = phone.new_page(); watch(pg, 'phone')
         pg.goto(URL); pg.wait_for_selector('.setup-form')
         pg.screenshot(path=f'{OUT}/1-phone-setup.png')
-        inputs = pg.query_selector_all('.setup-form .amount-input')
-        for el, v in zip(inputs, ['3600', '6', '1000']):
-            el.fill(v)
+        fill_setup(pg, ['3600', '6', '1000'])
         pg.fill('.setup-form input[type=date]', '2026-10-01')
         pg.click('.setup-form button[type=submit]')
         pg.wait_for_selector('.feed')

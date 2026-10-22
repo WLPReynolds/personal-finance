@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <!-- v0.13.2: must match APP_VERSION in src/app.js (and sw.js, package.json) — the app checks it -->
-  <meta name="app-version" content="0.15.7">
+  <meta name="app-version" content="0.15.8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Personal Finance</title>
   <meta name="theme-color" content="#0f5c55">
@@ -38,7 +38,7 @@
   <main id="app" aria-live="polite"></main>
 
   <footer class="app-footer">
-    <span class="version-tag" id="footerVersion">Personal Finance · v0.15.7</span>
+    <span class="version-tag" id="footerVersion">Personal Finance · v0.15.8</span>
   </footer>
 
   <button type="button" id="fab" class="fab" aria-label="Add entry" hidden>+</button>
@@ -58,6 +58,7 @@
   <dialog id="finderDialog" class="sheet sheet-tall sheet-wide window"></dialog>
   <dialog id="exportDialog" class="sheet sheet-tall window"></dialog>
   <dialog id="installDialog" class="sheet"></dialog>
+  <dialog id="claimsDialog" class="sheet sheet-tall window"></dialog>
   <input type="file" id="importInput" hidden>
   <div id="toast" class="toast" role="status" hidden></div>
 

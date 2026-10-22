@@ -35,7 +35,7 @@ try:
         # ---------- phone: set up, add entries, connect
         phone = new_device(b, 412, 915)
         phone.wait_for_selector('.setup-form')
-        for el, v in zip(phone.query_selector_all('.setup-form .amount-input'), ['3600', '6', '1000']): el.fill(v)
+        fill_setup(phone, ['3600', '6', '1000'])
         phone.fill('.setup-form input[type=date]', '2026-10-01')
         phone.click('.setup-form button[type=submit]')
         phone.wait_for_selector('.feed')

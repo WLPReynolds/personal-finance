@@ -10,6 +10,7 @@ import { createTransfer } from './ledger.js';
 import { calculateRunningBalance } from './balances.js';
 import { cleanEnvelopeConfig, envelopesInUse, validateSplits, fitSplits, isEnvelopeMove, envelopeConfig } from './envelopes.js';
 import { assertNoLoanTransferOut, cleanLimit, isLoan } from './limits.js';
+import { fitExpense } from './expenses.js';
 
 export const ACCOUNT_TYPES = ['current', 'savings', 'credit', 'loan'];
 
@@ -224,7 +225,7 @@ export function updateTransaction(ledger, id, fields) {
   const existing = ledger.transactions.find((t) => t.id === id);
   if (!existing) throw new Error('Transaction not found');
   if (isEnvelopeMove(existing)) throw new Error('Edit a move between envelopes from its own dialog');
-  const merged = { ...existing, ...fields };
+  let merged = { ...existing, ...fields };
   validate(merged);
   if (merged.kind === 'note') merged.amount = 0;
   // v0.12 envelopes: given → checked; not given → the old ones follow a new amount where they can
@@ -234,6 +235,7 @@ export function updateTransaction(ledger, id, fields) {
   else merged.envelopeSplits = fitSplits(existing.envelopeSplits, merged.amount);
   merged.description = (merged.description ?? '').trim();
   if (existing.reconciled && changedFrom(existing, merged, RECONCILE_FIELDS)) merged.reconciled = false;
+  merged = fitExpense(merged); // v0.15.8: a claim never exceeds its entry
 
   if (!existing.transferId) {
     return touch({ ...ledger, transactions: ledger.transactions.map((t) => (t.id === id ? merged : t)) });
@@ -246,7 +248,7 @@ export function updateTransaction(ledger, id, fields) {
       const leg = { ...t, date: merged.date, amount: merged.amount, description: merged.description, direction: opposite };
       if (t.envelopeSplits) leg.envelopeSplits = fitSplits(t.envelopeSplits, merged.amount);
       if (t.reconciled && changedFrom(t, leg, ['amount', 'date', 'direction'])) leg.reconciled = false;
-      return leg;
+      return fitExpense(leg);
     }
     return t;
   });

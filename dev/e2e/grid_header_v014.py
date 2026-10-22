@@ -21,7 +21,7 @@ try:
     ctx = b.new_context(viewport={'width': 1440, 'height': 700}, color_scheme='dark')
     pg = ctx.new_page(); pg.clock.install(time=datetime.datetime(2026,10,7,9,0,0)); pg.goto(URL)
     pg.wait_for_selector('.setup-form')
-    for el, v in zip(pg.query_selector_all('.setup-form .amount-input'), ['3600','6','1000']): el.fill(v)
+    fill_setup(pg, ['3600','6','1000'])
     pg.fill('.setup-form input[type=date]', '2026-10-01')
     pg.click('.setup-form button[type=submit]'); pg.wait_for_selector('table.grid')
     for i in range(30):

@@ -55,7 +55,7 @@ try:
         b = p.chromium.launch()
         desk = device(b, 1440, 900, False)
         desk.wait_for_selector('.setup-form')
-        for el, v in zip(desk.query_selector_all('.setup-form .amount-input'), ['3600', '6', '1000']): el.fill(v)
+        fill_setup(desk, ['3600', '6', '1000'])
         desk.fill('.setup-form input[type=date]', '2026-10-01')
         desk.click('.setup-form button[type=submit]'); desk.wait_for_selector('table.grid')
         open_settings(desk)

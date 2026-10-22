@@ -175,3 +175,19 @@ window.google = { accounts: { oauth2: { initTokenClient(cfg) {
   return client;
 } } } };
 """
+
+# ---------------------------------------------------------------- first-run setup
+# v0.15.8: the Quick start no longer pre-fills Current Account / Nationwide /
+# Barclaycard. The suites were written for those three, so this fills the new
+# "Set up your accounts" form with the same three (amounts in the same order).
+LEGACY_SETUP = [('Current Account', 'current', 'other'), ('Nationwide', 'credit', 'nationwide'), ('Barclaycard', 'credit', 'barclaycard')]
+
+def fill_setup(pg, amounts, accounts=LEGACY_SETUP):
+    pg.wait_for_selector('.setup-form')
+    for i, ((name, typ, inst), amount) in enumerate(zip(accounts, amounts)):
+        if i: pg.click('.setup-form button:has-text("Add another account")')
+        card = pg.locator('.setup-account').nth(i)
+        card.locator('input[type=text]').first.fill(name)
+        card.locator('select').nth(0).select_option(typ)
+        card.locator('select').nth(1).select_option(inst)
+        card.locator('.amount-input').fill(amount)
