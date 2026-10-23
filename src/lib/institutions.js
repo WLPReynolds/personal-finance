@@ -17,6 +17,8 @@ export const INSTITUTIONS = {
   // Klarna pink #FFA8CD is from Klarna's own docs; their black #0B051D is
   // the text colour on pink (white on this pink is unreadable).
   klarna: { label: 'Klarna', colour: '#FFA8CD', accent: null, ink: '#0B051D' },
+  // Fluid (NewDay): plum purple, matched by eye to a photo of the card (v0.15.12).
+  fluid: { label: 'Fluid', colour: '#5E2460', accent: null },
   // Very: PLACEHOLDER neutral charcoal. No official hex found; replace.
   very: { label: 'Very', colour: '#2B2B2B', accent: null },
   // v0.14: the joint account with Alison — purple with a people icon (agreed in the first UI decisions)
