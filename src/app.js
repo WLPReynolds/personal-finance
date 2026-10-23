@@ -69,8 +69,9 @@ import {
 
 import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } from './lib/update-check.js';
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
+import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.10';
+export const APP_VERSION = '0.15.11';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -982,6 +983,9 @@ function attempt(fn) {
 // ------------------------------------------------------------------ render
 
 function render() {
+  // v0.15.11: the faint bank-colour page wash belongs to an account's list only (renderList sets it)
+  document.body.classList.remove('bank-wash');
+  document.body.style.removeProperty('--bank');
   const accounts = visibleAccounts();
   if (!state.activeAccountId || !accounts.some((a) => a.id === state.activeAccountId)) {
     state.activeAccountId = accounts[0]?.id ?? null;
@@ -1163,6 +1167,7 @@ function bannerCard(active, view, today, { summary = false } = {}) {
       limEl,
       stmtEl,
       h('div', { class: 'banner-open', 'aria-hidden': 'true' }, '›'),
+      monthSparkline(active, view, today),
       envEl);
   }
 
@@ -1185,6 +1190,16 @@ function bannerCard(active, view, today, { summary = false } = {}) {
           h('button', { type: 'button', class: 'banner-edit banner-rec', onclick: () => openReconcileDialog(active.id) }, 'Reconcile…')),
         h('div', { class: 'banner-eom' }, `${showsOwed(active) ? 'Owed ' : ''}${formatPence(eomBal)} at end of ${monthYearLabel(eomIso)}`))),
     hasDrawer ? h('div', { class: 'banner-drawer' }, limEl, stmtEl, claimsEl, envEl) : null);
+}
+
+/** v0.15.11: this month's balance, day by day, as a small line on the summary card. */
+function monthSparkline(active, view, today) {
+  const days = monthDays(today);
+  const markup = sparklineSvg(days.map((d) => balanceAsOf(view, active, d)), days.indexOf(today));
+  if (!markup) return null;
+  const el = h('div', { class: 'spark-wrap', title: `${monthYearLabel(today)}: solid to today, dashed ahead` });
+  el.innerHTML = markup;
+  return el;
 }
 
 /** v0.14 phone landing page: every visible account's header card. */
@@ -1311,6 +1326,8 @@ function renderList(accounts) {
   // v0.15.10: in light mode the day bands are tinted with the bank's main colour (styles.css).
   // Light brand colours (Klarna's pink) carry their own ink, so the band uses a stronger tint with that ink.
   const bankStyle = institutionStyle(active.institution);
+  document.body.classList.add('bank-wash'); // v0.15.11: light mode only (styles.css)
+  document.body.style.setProperty('--bank', bankStyle.colour);
   const bandLight = bankStyle.ink.toUpperCase() !== '#FFFFFF';
   const feed = h('ul', { class: `feed feed-bank ${bandLight ? 'band-light' : ''}`, style: { '--bank': bankStyle.colour, '--bank-ink': bankStyle.ink } });
   feed.append(h('li', { class: 'day', dataset: { date: active.openingDate, month: active.openingDate.slice(0, 7) } }, longDate(active.openingDate)),
