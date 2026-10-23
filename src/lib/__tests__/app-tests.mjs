@@ -226,7 +226,7 @@ test('matches accountBalances when the cutoff is after everything entered', () =
 });
 
 test('institutions: Flex, Klarna and Very exist; ink defaults to white, Klarna is dark', () => {
-  for (const k of ['monzoflex', 'klarna', 'very']) assert.ok(INSTITUTIONS[k], k);
+  for (const k of ['monzoflex', 'klarna', 'fluid', 'very']) assert.ok(INSTITUTIONS[k], k);
   assert.equal(institutionStyle('monzoflex').accent, '#FF4D56');
   assert.equal(institutionStyle('nationwide').ink, '#FFFFFF');
   assert.equal(institutionStyle('klarna').colour, '#FFA8CD');
