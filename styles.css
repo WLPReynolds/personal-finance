@@ -369,6 +369,22 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .day + li .entry { border-radius: 10px 10px 0 0; }
 .feed li:has(+ .day) .entry, .feed li:has(+ .horizon-li) .entry, .feed li:last-child .entry { border-radius: 0 0 10px 10px; }
 .day + li:has(+ .day) .entry, .day + li:has(+ .horizon-li) .entry, .day + li:last-child .entry { border-radius: 10px; }
+/* v0.15.10: light mode only — the list view's day bands take a soft tint of the bank's main colour,
+   with a full-strength edge. Dark mode keeps the plain bands. Klarna-style light brands use a stronger
+   tint and their own ink, so the band reads as the brand (pink with black text). */
+@media (prefers-color-scheme: light) {
+  .feed-bank .day {
+    background: color-mix(in srgb, var(--bank) 14%, #ffffff);
+    color: color-mix(in srgb, var(--bank) 70%, #000000);
+    box-shadow: inset 4px 0 0 var(--bank);
+    border-radius: 8px; padding: 7px 10px; margin: 12px 0 6px;
+  }
+  .feed-bank.band-light .day {
+    background: color-mix(in srgb, var(--bank) 60%, #ffffff);
+    color: var(--bank-ink);
+    box-shadow: inset 4px 0 0 var(--bank-ink);
+  }
+}
 /* jumping to today: land the day heading just below the sticky top bar + account tabs + banner */
 .feed .day { scroll-margin-top: calc(57px + 61px + var(--banner-bar-h, 44px) + env(safe-area-inset-top, 0px)); }
 .horizon-li { padding-top: 10px; }

@@ -70,7 +70,7 @@ import {
 import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } from './lib/update-check.js';
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 
-export const APP_VERSION = '0.15.9';
+export const APP_VERSION = '0.15.10';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -1308,7 +1308,11 @@ function renderList(accounts) {
 
   // Oldest first, same order as the grid: future entries at the bottom.
   const running = accountRunning(view, active);
-  const feed = h('ul', { class: 'feed' });
+  // v0.15.10: in light mode the day bands are tinted with the bank's main colour (styles.css).
+  // Light brand colours (Klarna's pink) carry their own ink, so the band uses a stronger tint with that ink.
+  const bankStyle = institutionStyle(active.institution);
+  const bandLight = bankStyle.ink.toUpperCase() !== '#FFFFFF';
+  const feed = h('ul', { class: `feed feed-bank ${bandLight ? 'band-light' : ''}`, style: { '--bank': bankStyle.colour, '--bank-ink': bankStyle.ink } });
   feed.append(h('li', { class: 'day', dataset: { date: active.openingDate, month: active.openingDate.slice(0, 7) } }, longDate(active.openingDate)),
     h('li', { dataset: { month: active.openingDate.slice(0, 7) } }, h('div', { class: 'entry entry-note' },
       h('span', { class: 'entry-main' }, h('span', { class: 'entry-desc' }, 'Brought forward')),
