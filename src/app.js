@@ -71,7 +71,7 @@ import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } f
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.17';
+export const APP_VERSION = '0.15.18';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -3608,7 +3608,7 @@ function renderSettings() {
         }, 'Connect Google Drive'));
 
   // v0.15.17: Settings is a menu (like a phone's Settings); each line opens its own page with
-  // "‹ Settings" to come back. Escape / the phone's back gesture on a page also comes back.
+  // "‹ Settings" to come back. Escape / the phone's back gesture / ✕ (v0.15.18) on a page also come back.
   const jointOn = Boolean(state.jointSettings?.enabled);
   const nRec = recurringItems(l).length;
   const claimAccs = l.accounts.filter(claimsOn);
@@ -3711,9 +3711,14 @@ function renderSettings() {
       }, 'Erase all data on this device'))] },
   ].filter(Boolean);
 
-  const closeBtn = h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕');
   const page = pages.find((pg) => pg.id === settingsPage && pg.content);
   if (!page) settingsPage = null;
+  // v0.15.18: on a page, ✕ goes back to the menu (like closing the Recurring window does); only the menu's ✕ closes Settings
+  const closeBtn = h('button', {
+    type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close',
+    title: page ? 'Back to Settings' : 'Close Settings',
+    onclick: () => { if (page) { settingsPage = null; renderSettings(); } else dlg.close(); },
+  }, '✕');
   const wasPage = dlg.dataset.page ?? '';
   dlg.dataset.page = page ? page.id : '';
 
