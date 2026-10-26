@@ -71,7 +71,7 @@ import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } f
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.16';
+export const APP_VERSION = '0.15.17';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -3540,27 +3540,17 @@ function ticketSection() {
     h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn-primary', id: 'ticketSave', onclick: save }, 'Save')));
 }
 
-/** Remembered across renderSettings() rebuilds (a save re-renders), so the section doesn't snap shut under your thumb. */
-let trackerGroupOpen = false;
+/** v0.14.7 → v0.15.17: the ticket tracker's figures and ⚙ Ticket purchases are one Settings page, listed only where the ledger uses the tracker (never on Alison's). */
 
-/**
- * v0.14.7: everything about the ticket tracker in one collapsible section —
- * the tracker's figures and ⚙ Ticket purchases. Shown only where the ledger
- * already uses the tracker (a tracker-fed recurring item, or ticket purchases
- * set up, even if switched off now); anywhere else — Alison's — it isn't drawn
- * at all. Closed by default.
- */
-function trackerGroup(l, st, children) {
-  if (!usesTracker(l) && !ticketSettingsRecord(l)) return null;
-  const warn = state.tracker?.error || state.tracker?.estimates?.ticketsError;
-  return h('details', {
-    class: 'settings-section tracker-group', id: 'trackerSection', open: trackerGroupOpen,
-    ontoggle: (e) => { trackerGroupOpen = e.currentTarget.open; },
-  },
-  h('summary', {}, h('h3', {}, 'Ticket tracker'), warn ? h('span', { class: 'tracker-flag warn small' }, ' · needs attention') : null),
-  h('div', { class: 'tracker-body' }, children));
-}
-
+/** v0.15.17: which Settings page is showing (null = the menu). Kept across redraws while Settings is open. */
+let settingsPage = null;
+// Escape / the phone's back gesture on a Settings page goes back to the menu instead of closing Settings.
+$('settingsDialog').addEventListener('cancel', (e) => {
+  if (!settingsPage) return;
+  e.preventDefault();
+  settingsPage = null;
+  renderSettings();
+});
 function renderSettings() {
   const dlg = $('settingsDialog');
   const l = state.ledger;
@@ -3617,31 +3607,36 @@ function renderSettings() {
           },
         }, 'Connect Google Drive'));
 
-  dlg.replaceChildren(h('div', { class: 'sheet-body' },
-    h('header', { class: 'sheet-head' },
-      h('h2', {}, 'Settings & backup'),
-      h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕')),
-
-    driveSection,
-
-    jointSection(),
-
-    backupsSection(st),
-
-    trackerGroup(l, st, [
-      usesTracker(l) ? [
-      h('h4', { class: 'tracker-sub' }, 'Figures from the tracker'),
-      h('p', { class: 'small' }, (() => {
-        const items = recurringItems(l).filter((i) => i.amountFrom === TRACKER_SOURCE).map((i) => i.description);
-        const amounts = items.length ? `${items.join(', ')} take${items.length === 1 ? 's' : ''} ${items.length === 1 ? 'its' : 'their'} amount from the ticket tracker.` : '';
-        return [amounts, ticketSettingsRecord(l)?.enabled ? 'Ticket purchases come from it too.' : ''].filter(Boolean).join(' ');
-      })()),
-      h('p', { class: `small ${state.tracker?.error ? 'warn' : 'muted'}`, id: 'trackerStatusLine' }, trackerStatusText()),
-      state.tracker?.estimates?.ticketsError ? h('p', { class: 'small warn' }, state.tracker.estimates.ticketsError) : null,
-      st.enabled ? h('button', { type: 'button', class: 'btn-secondary', onclick: checkTrackerFromTap }, 'Check now') : null,
-      ] : null,
-      ticketSection()]),
-
+  // v0.15.17: Settings is a menu (like a phone's Settings); each line opens its own page with
+  // "‹ Settings" to come back. Escape / the phone's back gesture on a page also comes back.
+  const jointOn = Boolean(state.jointSettings?.enabled);
+  const nRec = recurringItems(l).length;
+  const claimAccs = l.accounts.filter(claimsOn);
+  const trackerShown = Boolean(usesTracker(l) || ticketSettingsRecord(l));
+  const trackerWarn = state.tracker?.error || state.tracker?.estimates?.ticketsError;
+  const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  const pages = [
+    { group: 'Money', id: 'accounts', icon: 'wallet', title: 'Accounts', sub: `${plural(l.accounts.length, 'account')} · add, edit, reorder`,
+      content: () => [
+    h('section', { class: 'settings-section' },
+      h('h3', {}, 'Accounts'),
+      accountsList,
+      h('button', { type: 'button', class: 'btn-secondary', onclick: () => openAccountDialog(null) }, '+ Add account'))] },
+    { group: 'Money', id: 'recurring', icon: 'repeat', title: 'Recurring items',
+      sub: nRec ? `${plural(nRec, 'item')} · salary, bills, subscriptions` : 'Salary, bills, subscriptions, card payments',
+      open: openRecurringManager },
+    { group: 'Money', id: 'expenses', icon: 'receipt', title: 'Expense claims',
+      sub: claimAccs.length ? `On for ${claimAccs.map((a) => a.name).join(', ')}` : 'Off · turn on for an account',
+      content: () => [expensesUI.settingsSection() ?? h('section', { class: 'settings-section' },
+        h('h3', {}, 'Expense claims'),
+        h('p', { class: 'muted small' }, 'Keep receipts against card spends you claim back from work, and get a list of what to claim. Turn it on for an account under Accounts → Edit → “Can have expense claims”.'),
+        h('button', { type: 'button', class: 'btn-secondary', onclick: () => { settingsPage = 'accounts'; renderSettings(); } }, 'Go to Accounts'))] },
+    { group: 'Money', id: 'joint', icon: 'users', title: 'Joint account', sub: jointOn ? 'On on this device' : 'Off on this device',
+      content: () => [jointSection()] },
+    { group: 'Data', id: 'drive', icon: 'cloud', title: 'Google Drive sync', sub: st.enabled ? `On${st.email ? ` · ${st.email}` : ''}` : 'Off · keep your devices in step',
+      content: () => [driveSection] },
+    { group: 'Data', id: 'backups', icon: 'archive', title: 'Backups', sub: st.enabled ? 'Automatic backups and a backup file' : 'Move data between devices',
+      content: () => [backupsSection(st),
     h('section', { class: 'settings-section' },
       h('h3', {}, st.enabled ? 'Backup file' : 'Move data between devices'),
       h('p', { class: 'muted small' }, st.enabled
@@ -3653,28 +3648,26 @@ function renderSettings() {
         h('button', { type: 'button', class: canShare ? 'btn-secondary' : 'btn-primary', onclick: () => doExport(false) }, 'Download export'),
         h('button', { type: 'button', class: 'btn-secondary', onclick: () => $('importInput').click() }, 'Import…')),
       h('p', { class: 'muted small' },
-        `Last export: ${when(state.meta.lastExportAt)} · Last import: ${when(state.meta.lastImportAt)}${state.meta.lastImportFrom ? ` (from ${state.meta.lastImportFrom})` : ''}`)),
-
-    archiveUI.settingsSection(),
-
-    exportUI.settingsSection(),
-
-    expensesUI.settingsSection(),
-
-    h('section', { class: 'settings-section' },
-      h('h3', {}, 'Recurring items'),
-      h('p', { class: 'muted small' }, (() => {
-        const n = recurringItems(l).length;
-        return n ? `${n} recurring item${n === 1 ? '' : 's'} — salary, bills, subscriptions, card payments.` : 'Salary, direct debits, subscriptions, card payments — set up once, then confirm each month.';
+        `Last export: ${when(state.meta.lastExportAt)} · Last import: ${when(state.meta.lastImportAt)}${state.meta.lastImportFrom ? ` (from ${state.meta.lastImportFrom})` : ''}`))] },
+    { group: 'Data', id: 'history', icon: 'clock', title: 'History & Excel', sub: 'Import earlier years, export to Excel',
+      content: () => [archiveUI.settingsSection(), exportUI.settingsSection()] },
+    trackerShown ? { group: 'Data', id: 'tracker', icon: 'ticket', title: 'Ticket tracker', sub: trackerWarn ? 'Needs attention' : 'Figures and ticket purchases', warn: Boolean(trackerWarn),
+      content: () => [h('section', { class: 'settings-section tracker-group', id: 'trackerSection' }, h('h3', {}, 'Ticket tracker'), h('div', { class: 'tracker-body' },
+    [
+      usesTracker(l) ? [
+      h('h4', { class: 'tracker-sub' }, 'Figures from the tracker'),
+      h('p', { class: 'small' }, (() => {
+        const items = recurringItems(l).filter((i) => i.amountFrom === TRACKER_SOURCE).map((i) => i.description);
+        const amounts = items.length ? `${items.join(', ')} take${items.length === 1 ? 's' : ''} ${items.length === 1 ? 'its' : 'their'} amount from the ticket tracker.` : '';
+        return [amounts, ticketSettingsRecord(l)?.enabled ? 'Ticket purchases come from it too.' : ''].filter(Boolean).join(' ');
       })()),
-      h('button', { type: 'button', class: 'btn-secondary', onclick: openRecurringManager }, 'Manage recurring items')),
-
-    h('section', { class: 'settings-section' },
-      h('h3', {}, 'Accounts'),
-      accountsList,
-      h('button', { type: 'button', class: 'btn-secondary', onclick: () => openAccountDialog(null) }, '+ Add account')),
-
-    h('section', { class: 'settings-section' },
+      h('p', { class: `small ${state.tracker?.error ? 'warn' : 'muted'}`, id: 'trackerStatusLine' }, trackerStatusText()),
+      state.tracker?.estimates?.ticketsError ? h('p', { class: 'small warn' }, state.tracker.estimates.ticketsError) : null,
+      st.enabled ? h('button', { type: 'button', class: 'btn-secondary', onclick: checkTrackerFromTap }, 'Check now') : null,
+      ] : null,
+      ticketSection()]))] } : null,
+    { group: 'This device', id: 'layout', icon: 'layout', title: 'Layout', sub: 'Grid or list, and where the phone opens',
+      content: () => [h('section', { class: 'settings-section' },
       h('h3', {}, 'Layout'),
       h('p', { class: 'muted small' }, 'Auto = grid on wide screens, list on phones.'),
       viewChoice,
@@ -3683,11 +3676,11 @@ function renderSettings() {
         [['summary', 'Summary'], ['account', 'First account']].map(([v, label]) => h('button', {
           type: 'button', class: 'seg-btn', 'aria-checked': String(state.phoneLanding === v),
           onclick: () => { state.phoneLanding = v; writePref('phoneLanding', v); renderSettings(); },
-        }, label)))),
-
-    lockSection(),
-
-    h('section', { class: 'settings-section' },
+        }, label))))] },
+    { group: 'This device', id: 'lock', icon: 'lock', title: 'Passphrase lock', sub: state.vault ? 'On' : 'Off',
+      content: () => [lockSection()] },
+    { group: 'This device', id: 'device', icon: 'device', title: 'This device', sub: 'What’s stored here · erase all data',
+      content: () => [h('section', { class: 'settings-section' },
       h('h3', {}, 'This device'),
       h('p', { class: 'muted small' }, `${l.transactions.length} entries across ${l.accounts.length} accounts on this device.`),
       h('button', {
@@ -3715,9 +3708,61 @@ function renderSettings() {
           dlg.close();
           commitParts({ personal: emptyLedger() }, 'All data erased');
         },
-      }, 'Erase all data on this device')),
+      }, 'Erase all data on this device'))] },
+  ].filter(Boolean);
 
+  const closeBtn = h('button', { type: 'button', class: 'btn-ghost icon-btn', 'aria-label': 'Close', onclick: () => dlg.close() }, '✕');
+  const page = pages.find((pg) => pg.id === settingsPage && pg.content);
+  if (!page) settingsPage = null;
+  const wasPage = dlg.dataset.page ?? '';
+  dlg.dataset.page = page ? page.id : '';
+
+  if (page) {
+    dlg.replaceChildren(h('div', { class: 'sheet-body' },
+      h('header', { class: 'sheet-head' },
+        h('button', { type: 'button', class: 'settings-back', 'aria-label': 'Back to Settings', onclick: () => { settingsPage = null; renderSettings(); } }, '‹ Settings'),
+        h('h2', {}, page.title),
+        closeBtn),
+      page.content()));
+    // the page title already says it — drop a section heading that only repeats it
+    for (const h3 of dlg.querySelectorAll('.settings-section > h3')) if (h3.textContent.trim() === page.title) h3.hidden = true;
+  } else {
+    const groups = [...new Set(pages.map((pg) => pg.group))];
+    dlg.replaceChildren(h('div', { class: 'sheet-body' },
+      h('header', { class: 'sheet-head' }, h('h2', {}, 'Settings'), closeBtn),
+      groups.map((g) => h('nav', { class: 'settings-group', 'aria-label': g },
+        h('h3', { class: 'settings-group-title' }, g),
+        h('ul', { class: 'settings-menu' }, pages.filter((pg) => pg.group === g).map((pg) => h('li', {},
+          h('button', {
+            type: 'button', class: `settings-item${pg.warn ? ' settings-item-warn' : ''}`, 'data-page': pg.id,
+            onclick: () => { if (pg.open) { pg.open(); return; } settingsPage = pg.id; renderSettings(); },
+          },
+          settingsIcon(pg.icon),
+          h('span', { class: 'settings-item-text' }, h('span', { class: 'settings-item-title' }, pg.title), h('span', { class: 'settings-item-sub' }, pg.sub)),
+          h('span', { class: 'settings-item-go', 'aria-hidden': 'true' }, pg.open ? '↗' : '›'))))))),
     h('p', { class: 'muted small center' }, `Personal Finance v${APP_VERSION} · ${state.meta.persisted ? 'storage protected' : 'storage may be cleared by the browser — keep exports'}`)));
+  }
+  if (wasPage !== dlg.dataset.page) dlg.scrollTop = 0; // a new page starts at its top
+}
+
+/** v0.15.17 Settings menu icons — line style (24×24, 2px rounded strokes), like the expense icons. */
+const SETTINGS_ICON_PATHS = {
+  wallet: '<rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>',
+  repeat: '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+  receipt: '<path d="M6 2h12a1 1 0 0 1 1 1v18l-2.5-1.5L14 21l-2.5-1.5L9 21l-2.5-1.5L4 21V3a1 1 0 0 1 1-1z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="12" y2="15"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  cloud: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
+  archive: '<polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  ticket: '<path d="M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3a2 2 0 0 0 0 4v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 0 0-4z"/><line x1="14" y1="5" x2="14" y2="19" stroke-dasharray="2 2"/>',
+  layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  device: '<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+};
+function settingsIcon(name) {
+  const el = h('span', { class: 'settings-item-icon', 'aria-hidden': 'true' });
+  el.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${SETTINGS_ICON_PATHS[name]}</svg>`;
+  return el;
 }
 
 // ------------------------------------------------------------------ v0.14 joint account switch
@@ -4052,6 +4097,7 @@ async function doImport(file) {
 
 $('settingsBtn').addEventListener('click', () => {
   auth.preload?.(); // get Google's script ready in case "Connect" is tapped
+  settingsPage = null; // v0.15.17: always opens on the menu
   renderSettings();
   openDialog($('settingsDialog'));
 });

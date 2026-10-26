@@ -1073,3 +1073,33 @@ dialog.sheet-wide { height: 94dvh; }
 .spark path { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .spark .spark-ahead { stroke-dasharray: 3 4; opacity: 0.55; }
 .spark-dot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 2px var(--acc); }
+
+/* ---- v0.15.17 Settings as a menu: grouped lines, each opening its own page ("‹ Settings" back) */
+.settings-group { display: grid; gap: 6px; }
+.settings-group-title { margin: 6px 0 0; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.settings-menu { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface-2); }
+.settings-menu li + li { border-top: 1px solid var(--line); }
+.settings-item {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 12px;
+  border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit;
+}
+.settings-item:hover, .settings-item:focus-visible { background: color-mix(in srgb, var(--primary) 10%, var(--surface-2)); }
+.settings-item-icon { flex: none; display: inline-flex; width: 36px; height: 36px; align-items: center; justify-content: center; border-radius: 10px;
+  color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, var(--surface)); }
+.settings-item-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.settings-item-title { font-weight: 600; font-size: 15px; }
+.settings-item-sub { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-item-warn .settings-item-sub { color: var(--warn-text); }
+.settings-item-go { flex: none; font-size: 20px; color: var(--muted); }
+/* the way back: a clear button at the left of the title bar */
+.settings-back {
+  flex: none; min-height: 40px; padding: 0 12px; border-radius: 10px; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
+  background: color-mix(in srgb, var(--primary-text) 16%, transparent); color: var(--primary-text);
+  border: 1px solid color-mix(in srgb, var(--primary-text) 45%, transparent);
+}
+.settings-back:hover, .settings-back:focus-visible { background: color-mix(in srgb, var(--primary-text) 28%, transparent); }
+#settingsDialog[data-page]:not([data-page=""]) .sheet-head h2 { text-align: center; }
+/* a page's first section sits straight under the title bar (no divider above it) */
+#settingsDialog .sheet-head + .settings-section { border-top: 0; padding-top: 0; margin-top: 0; }
+/* Settings keeps a steady height between the menu and its pages, so it doesn't jump about */
+#settingsDialog[open] { min-height: min(78dvh, 760px); }
