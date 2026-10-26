@@ -135,6 +135,8 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .sheet-head { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; background: var(--surface); padding-top: 8px; z-index: 1; }
 .sheet-head h2 { flex: 1; font-size: 17px; margin: 0; }
 .sheet-head h2 { min-width: 0; }
+/* v0.15.15: no coloured account square in a title bar (it clashed with the amber, e.g. Monzo red) — both themes */
+.sheet-head > .swatch { display: none; }
 /* v0.15.14: a proper title bar — tinted in the account's colour (grey where there's no account),
    full width, with a line under it — and a ✕ that looks like a button, so the eye finds it */
 .sheet-body > .sheet-head:first-child {
@@ -164,7 +166,6 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
   .sheet-head .icon-btn[aria-label="Close"]:focus-visible, dialog.window .win-close:hover, dialog.window .win-close:focus-visible { background: #b42318; border-color: #b42318; color: #fff; }
   /* other buttons and icons that sit in a title bar keep readable on amber */
   .sheet-body > .sheet-head:first-child .btn-ghost:not([aria-label="Close"]) { color: var(--titlebar-text); }
-  .sheet-body > .sheet-head:first-child .swatch { box-shadow: 0 0 0 2px #15171c; }
 }
 .head-actions { display: flex; align-items: center; gap: 8px; }
 .sheet-actions { display: flex; justify-content: space-between; gap: 10px; padding-top: 4px; }
