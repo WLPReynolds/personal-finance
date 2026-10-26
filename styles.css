@@ -151,22 +151,27 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 }
 .sheet-head .icon-btn[aria-label="Close"]:hover, .win-close:hover,
 .sheet-head .icon-btn[aria-label="Close"]:focus-visible, .win-close:focus-visible { background: var(--danger); border-color: var(--danger); color: #fff; }
-/* v0.15.15: dark theme — Claude's amber title bar (dark text reads better on it than white),
-   with a dark ✕ tile so the close button stands right out */
+/* v0.15.16: title bars in the app's green accent (the Add button's colour), both themes.
+   Text uses the same colour as the Add button's text; the ✕ is a contrasting tile. */
+.sheet-body > .sheet-head:first-child, dialog.window .win-bar {
+  background: var(--primary); color: var(--primary-text);
+  border-bottom-color: color-mix(in srgb, var(--primary) 70%, #000);
+}
+.sheet-body > .sheet-head:first-child h2, dialog.window .win-title { color: var(--primary-text); }
+.sheet-body > .sheet-head:first-child .btn-ghost:not([aria-label="Close"]) { color: var(--primary-text); }
+/* a green button in a green bar (Recurring "+ Add") becomes a contrasting tile like the ✕ */
+.sheet-body > .sheet-head:first-child .btn-primary { background: var(--surface); color: var(--text); border: 1px solid var(--surface); }
+.sheet-head .people-icon { color: inherit; }
+.sheet-head .icon-btn[aria-label="Close"], dialog.window .win-close {
+  background: #fff; color: #15171c; border-color: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+}
 @media (prefers-color-scheme: dark) {
-  :root { --titlebar: #D97757; --titlebar-text: #1a1410; }
-  .sheet-body > .sheet-head:first-child, dialog.window .win-bar {
-    background: var(--titlebar); color: var(--titlebar-text); border-bottom-color: #b85f42;
-  }
-  .sheet-body > .sheet-head:first-child h2, dialog.window .win-title { color: var(--titlebar-text); }
   .sheet-head .icon-btn[aria-label="Close"], dialog.window .win-close {
     background: #15171c; color: #fff; border-color: #15171c; box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
   }
-  .sheet-head .icon-btn[aria-label="Close"]:hover, .win-close:hover,
-  .sheet-head .icon-btn[aria-label="Close"]:focus-visible, dialog.window .win-close:hover, dialog.window .win-close:focus-visible { background: #b42318; border-color: #b42318; color: #fff; }
-  /* other buttons and icons that sit in a title bar keep readable on amber */
-  .sheet-body > .sheet-head:first-child .btn-ghost:not([aria-label="Close"]) { color: var(--titlebar-text); }
 }
+.sheet-head .icon-btn[aria-label="Close"]:hover, dialog.window .win-close:hover,
+.sheet-head .icon-btn[aria-label="Close"]:focus-visible, dialog.window .win-close:focus-visible { background: #b42318; border-color: #b42318; color: #fff; }
 .head-actions { display: flex; align-items: center; gap: 8px; }
 .sheet-actions { display: flex; justify-content: space-between; gap: 10px; padding-top: 4px; }
 .sheet-actions .btn-primary { min-width: 120px; }
