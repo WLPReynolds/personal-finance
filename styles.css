@@ -134,6 +134,21 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .sheet-body { display: grid; gap: 14px; padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); }
 .sheet-head { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; background: var(--surface); padding-top: 8px; z-index: 1; }
 .sheet-head h2 { flex: 1; font-size: 17px; margin: 0; }
+.sheet-head h2 { min-width: 0; }
+/* v0.15.14: a proper title bar — tinted in the account's colour (grey where there's no account),
+   full width, with a line under it — and a ✕ that looks like a button, so the eye finds it */
+.sheet-body > .sheet-head:first-child {
+  margin: -8px -16px 0; padding: 10px 10px 10px 16px; min-height: 56px;
+  background: color-mix(in srgb, var(--acc, var(--muted)) 16%, var(--surface));
+  border-bottom: 1px solid var(--line-strong); border-radius: 16px 16px 0 0;
+}
+.sheet-head .icon-btn[aria-label="Close"], .win-close {
+  flex: none; width: 40px; height: 40px; min-width: 40px; padding: 0; border-radius: 10px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line-strong);
+  font-size: 18px; font-weight: 700; line-height: 1; box-shadow: 0 1px 2px rgb(0 0 0 / 15%); cursor: pointer;
+}
+.sheet-head .icon-btn[aria-label="Close"]:hover, .win-close:hover,
+.sheet-head .icon-btn[aria-label="Close"]:focus-visible, .win-close:focus-visible { background: var(--danger); border-color: var(--danger); color: #fff; }
 .head-actions { display: flex; align-items: center; gap: 8px; }
 .sheet-actions { display: flex; justify-content: space-between; gap: 10px; padding-top: 4px; }
 .sheet-actions .btn-primary { min-width: 120px; }
@@ -815,15 +830,10 @@ dialog.window[open] { display: flex; flex-direction: column; overflow: hidden; }
 dialog.window { max-height: 94dvh; }
 .win-bar {
   flex: none; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 6px 6px 16px;
-  background: var(--surface-2); border-bottom: 1px solid var(--line-strong); border-radius: inherit;
+  background: color-mix(in srgb, var(--muted) 16%, var(--surface)); border-bottom: 1px solid var(--line-strong); border-radius: inherit;
   border-bottom-left-radius: 0; border-bottom-right-radius: 0;
 }
 .win-title { flex: 1; min-width: 0; margin: 0; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.win-close {
-  flex: none; width: 40px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--text);
-  font-size: 18px; line-height: 1; cursor: pointer;
-}
-.win-close:hover { background: var(--danger); color: #fff; }
 .win-body { flex: 1; min-height: 0; overflow: auto; padding-top: 14px; }
 dialog.sheet-wide { height: 94dvh; }
 @media (min-width: 640px) {
