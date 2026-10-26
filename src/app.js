@@ -71,7 +71,7 @@ import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } f
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.14';
+export const APP_VERSION = '0.15.15';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
