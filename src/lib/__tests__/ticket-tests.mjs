@@ -9,7 +9,7 @@ import { envelopeBalances } from '../envelopes.js';
 import { parseTrackerEstimates, usesTracker, refreshTrackerEstimates, TRACKER_READER } from '../tracker-estimates.js';
 import {
   setTicketSettings, ticketSettings, ticketSettingsProblem, ticketProjections, confirmTicket, confirmedTicketIds,
-  addRingFence, removeRingFence, syncRingFence, ringFenceLegs, ticketsMissingFromTracker, confirmReturn, ticketTxId,
+  addRingFence, moveLockedByRingFence, removeRingFence, syncRingFence, ringFenceLegs, ticketsMissingFromTracker, confirmReturn, ticketTxId,
 } from '../tickets.js';
 import { prepareMerge } from '../sync-core.js';
 import { buildExport, parseImport } from '../transfer-file.js';
@@ -267,6 +267,12 @@ await test('"No longer in tracker": a confirmed ticket whose id left the file (w
 });
 
 console.log('ring-fencing any card spend');
+await test('v0.15.13 entry form: "Also record…" is locked only while the ring-fence tickbox is showing and ticked', () => {
+  assert.equal(moveLockedByRingFence(true, true), true, 'shown + ticked → locked');
+  assert.equal(moveLockedByRingFence(true, false), false, 'shown, not ticked → free');
+  assert.equal(moveLockedByRingFence(false, true), false, 'hidden (even if the box was left ticked) → free');
+  assert.equal(moveLockedByRingFence(false, false), false, 'hidden → free');
+});
 await test('add, follow an edit, and remove', () => {
   const { ledger, card } = setup();
   const s = ticketSettings(ledger);
