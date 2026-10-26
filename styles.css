@@ -135,6 +135,8 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 .sheet-head { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; background: var(--surface); padding-top: 8px; z-index: 1; }
 .sheet-head h2 { flex: 1; font-size: 17px; margin: 0; }
 .sheet-head h2 { min-width: 0; }
+/* v0.15.15: no coloured account square in a title bar (it clashed with the amber, e.g. Monzo red) — both themes */
+.sheet-head > .swatch { display: none; }
 /* v0.15.14: a proper title bar — tinted in the account's colour (grey where there's no account),
    full width, with a line under it — and a ✕ that looks like a button, so the eye finds it */
 .sheet-body > .sheet-head:first-child {
@@ -149,6 +151,22 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 40%); }
 }
 .sheet-head .icon-btn[aria-label="Close"]:hover, .win-close:hover,
 .sheet-head .icon-btn[aria-label="Close"]:focus-visible, .win-close:focus-visible { background: var(--danger); border-color: var(--danger); color: #fff; }
+/* v0.15.15: dark theme — Claude's amber title bar (dark text reads better on it than white),
+   with a dark ✕ tile so the close button stands right out */
+@media (prefers-color-scheme: dark) {
+  :root { --titlebar: #D97757; --titlebar-text: #1a1410; }
+  .sheet-body > .sheet-head:first-child, dialog.window .win-bar {
+    background: var(--titlebar); color: var(--titlebar-text); border-bottom-color: #b85f42;
+  }
+  .sheet-body > .sheet-head:first-child h2, dialog.window .win-title { color: var(--titlebar-text); }
+  .sheet-head .icon-btn[aria-label="Close"], dialog.window .win-close {
+    background: #15171c; color: #fff; border-color: #15171c; box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
+  }
+  .sheet-head .icon-btn[aria-label="Close"]:hover, .win-close:hover,
+  .sheet-head .icon-btn[aria-label="Close"]:focus-visible, dialog.window .win-close:hover, dialog.window .win-close:focus-visible { background: #b42318; border-color: #b42318; color: #fff; }
+  /* other buttons and icons that sit in a title bar keep readable on amber */
+  .sheet-body > .sheet-head:first-child .btn-ghost:not([aria-label="Close"]) { color: var(--titlebar-text); }
+}
 .head-actions { display: flex; align-items: center; gap: 8px; }
 .sheet-actions { display: flex; justify-content: space-between; gap: 10px; padding-top: 4px; }
 .sheet-actions .btn-primary { min-width: 120px; }
