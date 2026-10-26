@@ -87,6 +87,9 @@ button, input, select { font: inherit; color: inherit; }
 .btn-secondary { background: var(--surface); border-color: var(--line-strong); }
 .btn-danger { background: transparent; color: var(--danger); border-color: var(--line-strong); }
 .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+/* v0.15.13: "Also record in another account?" while "Ring-fence it" is ticked */
+.field.is-disabled > span, .field.is-disabled select { opacity: 0.5; }
+.field select:disabled { cursor: not-allowed; }
 .btn-ghost { background: transparent; padding: 8px 10px; font-weight: 500; min-height: 40px; }
 .btn-ghost:hover { background: var(--surface-2); }
 .btn-link { background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }

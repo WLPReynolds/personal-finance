@@ -64,14 +64,14 @@ import {
 } from './lib/tracker-estimates.js';
 import {
   ticketSettings, ticketSettingsRecord, ticketSettingsProblem, setTicketSettings, confirmTicket, confirmReturn,
-  isRingFenced, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
+  isRingFenced, moveLockedByRingFence, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
 import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } from './lib/update-check.js';
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.12';
+export const APP_VERSION = '0.15.13';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -1750,6 +1750,7 @@ function openTxDialog(opts) {
     syncStatement();
     syncEnvelope();
     exp?.sync(kind);
+    syncMoveLock();
   }
   function updateCounterpartHint() {
     const other = accountById(counterpartSelect.value);
@@ -1806,6 +1807,21 @@ function openTxDialog(opts) {
       h('div', { class: 'muted small' }, `Moves the same amount from ${envName} (${envAcc.name}) to ${accountById(tset.safeAccountId).name} on the same day; it goes back before the card is paid.`));
   })() : null;
   const rfShown = () => Boolean(rfField) && !rfField.hidden;
+  /**
+   * v0.15.13: ring-fencing and "Also record in another account?" do overlapping jobs, so the
+   * dropdown is greyed out while the tickbox is showing AND ticked. Hidden tickbox (ring-fencing
+   * not set up, not this card, a credit or note) never locks it.
+   */
+  function syncMoveLock() {
+    if (existing) return; // editing shows the link (or nothing) instead of the dropdown
+    const locked = moveLockedByRingFence(rfShown(), rfBox.checked);
+    counterpartSelect.disabled = locked;
+    if (locked) counterpartSelect.value = '';
+    if (counterpartField) counterpartField.classList.toggle('is-disabled', locked);
+    if (locked) counterpartHint.textContent = 'Not needed — ring-fencing moves the money for you. Untick it to record this in another account.';
+    else updateCounterpartHint();
+  }
+  rfBox.addEventListener('change', syncMoveLock);
   const rfCard = existing?.ringFenceOf ? state.ledger.transactions.find((t) => t.id === existing.ringFenceOf) : null;
   const ticketNote = existing?.ticketId
     ? h('div', { class: 'linked' }, `🎟 Ticket from the ticket tracker (${existing.ticketId.replace(/^p-/, 'valid from ')}). Deleting it puts the “Bought — confirm” row back.`)
@@ -1889,10 +1905,10 @@ function openTxDialog(opts) {
   h('label', { class: 'field' }, h('span', {}, 'Description'), desc, datalist),
   h('label', { class: 'field' }, h('span', {}, 'Date'), date, dateWarn),
   stmtField,
+  rfField, // v0.15.13: above "Also record…" — it's the usual choice on a card spend
   counterpartField,
   picker.el,
   exp?.el,
-  rfField,
   recurringNote,
   ticketNote,
   existing && isReconciled(existing) ? h('div', { class: 'linked' }, '✓ Reconciled — matched against the bank. Changing the amount or date will untick it.') : null,

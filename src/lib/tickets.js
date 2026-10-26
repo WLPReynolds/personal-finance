@@ -135,6 +135,14 @@ export function ringFenceLegs(ledger, cardTxId) {
 }
 export const isRingFenced = (ledger, cardTxId) => ringFenceLegs(ledger, cardTxId).length > 0;
 
+/**
+ * v0.15.13 entry form: is "Also record in another account?" locked by the ring-fence tickbox?
+ * Only when the tickbox is showing AND ticked — a hidden tickbox never locks it.
+ */
+export function moveLockedByRingFence(tickboxShown, ticked) {
+  return Boolean(tickboxShown) && Boolean(ticked);
+}
+
 /** Can this entry be ring-fenced? A spend (debit, not a transfer) on the settings' card. */
 export function canRingFence(settings, t) {
   return Boolean(settings && t && t.accountId === settings.cardAccountId && t.kind !== 'note' && t.direction === 'debit' && !t.transferId);
