@@ -866,6 +866,12 @@ dialog.sheet-wide { height: 94dvh; }
 .arch-body > * { flex: none; min-width: 0; }
 .arch-body > .arch-results { flex: 1; min-height: 0; overflow: auto; }
 .arch-ro { border: 1px solid var(--line-strong); border-radius: 999px; padding: 1px 8px; }
+/* v0.15.19: on the green title bar the grey .muted text and border disappeared — follow the bar's text colour instead */
+dialog.window .win-bar .arch-ro {
+  color: var(--primary-text); font-weight: 600;
+  border-color: color-mix(in srgb, var(--primary-text) 60%, transparent);
+  background: color-mix(in srgb, var(--primary-text) 14%, transparent);
+}
 .arch-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .arch-searchbox { position: relative; flex: 1 1 240px; min-width: 0; }
 .arch-searchbox .arch-search { width: 100%; padding-right: 44px; }
