@@ -17,7 +17,7 @@
  *  - The spreadsheet's row order is kept (balances follow it). Rows whose
  *    date is out of order are flagged, not moved; he fixes real typos in
  *    the spreadsheet and imports again (a year's import replaces it).
- *  - Rows from the day the live data starts (1 Oct 2026) are left out.
+ *  - Rows from the day the live data starts (the earliest account opening date) are left out.
  *  - Browse like the spreadsheet; search across all years with a total per
  *    year and a grand total. No trends.
  *

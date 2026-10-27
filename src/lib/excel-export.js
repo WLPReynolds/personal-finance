@@ -17,7 +17,7 @@
  *    column), statement rows in upper case.
  *
  * A sheet's first row is "Brought forward" with the balances carried in, so
- * an export can be imported back into History (rows from 1 Oct 2026 aside).
+ * an export can be imported back into History (rows from the day the live data starts aside).
  *
  * Two steps, both pure: buildExport() → the rows and cells; exportWorkbook()
  * → the input for lib/xlsx-write.js. Money is integer pence until the sheet.

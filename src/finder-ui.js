@@ -17,6 +17,7 @@ const HISTORY_SVG = 'M13 3a9 9 0 0 0-9 9H1l3.9 3.9.1.1L9 12H6a7 7 0 1 1 2.05 4.9
 
 /**
  * ctx: { h, $, toast, openDialog, isOpen, isWide(),
+ *        liveFrom(): the day your records start, as text (e.g. '1 Oct 2026'), or null,
  *        liveGridRows(): grid rows over the view ledger (all accounts incl. joint),
  *        liveColumns(): [{ id, name, colour }] in the app's order,
  *        getArchive(): Promise<archive|null>, links(): { key: accountId },
@@ -109,7 +110,7 @@ export function createFinderUI(ctx) {
       const typed = state.query.trim();
       summary.textContent = typed
         ? `Keep typing — the search starts at ${MIN_SEARCH} letters (or press Enter to search for “${typed}”)`
-        : 'Searches your imported history, your accounts from 1 Oct 2026, and what’s due in the months shown on the grid.';
+        : `Searches your imported history, your accounts${ctx.liveFrom?.() ? ` from ${ctx.liveFrom()}` : ''}, and what’s due in the months shown on the grid.`;
       results.replaceChildren();
       return;
     }
