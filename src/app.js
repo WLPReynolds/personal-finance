@@ -71,7 +71,7 @@ import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } f
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.19';
+export const APP_VERSION = '0.15.20';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -495,12 +495,17 @@ const sync = createSyncEngine({
   afterSync: (token) => checkTracker(token),
 });
 
+/** The day your own records start: the earliest opening date across your accounts. */
+function firstLiveDate() {
+  return (state.personal?.accounts ?? []).map((a) => a.openingDate).filter(Boolean).sort()[0] ?? null;
+}
+
 // ---- v0.14.8: history imported from Budget.xlsx (src/archive-ui.js). Read
 // only and kept apart from the ledger: never in personal.json, the merge or sync.
 const archiveUI = createArchiveUI({
   h, $, toast, openDialog, isOpen, sync, drive: syncDrive,
   // rows from the day the app's own records start are left out of an import
-  firstLiveDate: () => (state.personal?.accounts ?? []).map((a) => a.openingDate).filter(Boolean).sort()[0] ?? null,
+  firstLiveDate: () => firstLiveDate(),
   renderSettings: () => renderSettings(),
   isWide: () => desktopQuery.matches,
   // v0.15: linking history accounts to your own accounts (not the joint one) — a synced settings record
@@ -513,6 +518,8 @@ const archiveUI = createArchiveUI({
 const finderUI = createFinderUI({
   h, $, toast, openDialog, isOpen,
   isWide: () => desktopQuery.matches,
+  // v0.15.20: the finder's opening text names this ledger's own start, not a fixed date
+  liveFrom: () => { const d = firstLiveDate(); return d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : null; },
   liveGridRows: () => {
     const view = viewLedger();
     // envelope moves carry no money: nothing to find
@@ -1032,6 +1039,16 @@ function render() {
 function renderSetup() {
   // v0.15.8: a neutral start — no names or banks filled in. Add as many accounts as you like.
   const date = h('input', { type: 'date', value: firstOfMonthIso(), required: true });
+  // v0.15.20: a gentle nudge when the opening date leaves a lot to catch up on (e.g. the 1st, late in the month)
+  const catchUp = h('div', { class: 'muted small', hidden: true });
+  const syncCatchUp = () => {
+    const days = date.value ? Math.round((new Date(todayIso() + 'T00:00:00') - new Date(date.value + 'T00:00:00')) / 86400000) + 1 : 0;
+    catchUp.hidden = days <= 7;
+    catchUp.textContent = `That's ${days} days of entries to catch up on — you can pick a later date if you'd rather.`;
+  };
+  date.addEventListener('input', syncCatchUp);
+  date.addEventListener('change', syncCatchUp);
+  syncCatchUp();
   const TYPES = [['current', 'Current account'], ['savings', 'Savings'], ['credit', 'Credit card'], ['loan', 'Loan / credit account']];
   const rows = [];
   const list = h('div', { class: 'setup-accounts' });
@@ -1085,6 +1102,7 @@ function renderSetup() {
   h('h2', {}, 'Set up your accounts'),
   h('p', { class: 'muted' }, 'Add the accounts you want to keep track of, with each balance as it stood at the start of the opening date — then add entries from there. Everything can be changed later in settings, and you can add more accounts at any time.'),
   h('label', { class: 'field' }, h('span', {}, 'Opening date (“brought forward”)'), date),
+  catchUp,
   list,
   h('button', { type: 'button', class: 'btn-secondary', onclick: () => addRow().focus() }, '+ Add another account'),
   h('button', { type: 'submit', class: 'btn-primary' }, 'Create accounts'));
