@@ -41,12 +41,9 @@ def setup(pg):
     pg.fill('.setup-form input[type=date]', '2026-10-01')
     pg.click('.setup-form button[type=submit]')
     pg.wait_for_selector('.feed, .grid')
-def open_settings(pg):
-    if pg.locator('#settingsDialog[open]').count() == 0: pg.click('#settingsBtn')
-    pg.wait_for_selector('#settingsDialog[open]')
 def connect(pg):
     open_settings(pg)
-    pg.click('#settingsDialog button:has-text("Connect Google Drive")')
+    settings_click(pg, '#settingsDialog button:has-text("Connect Google Drive")')
     pg.wait_for_function('() => /Synced/.test(document.getElementById("syncChip").textContent)', timeout=8000)
 def close_in_view(pg, dlg):
     """The window's ✕ is inside the viewport, and the title bar didn't scroll away."""
@@ -101,10 +98,10 @@ try:
         desk = device(b, 1400, 900, False)
         setup(desk)
         connect(desk)
-        st = desk.text_content('#settingsDialog')
+        st = settings_text(desk, 'history')
         check('⚙ has the history section before anything is imported', 'History from Excel' in st and 'Import from Excel…' in st)
         check('⚙ offers Get from Drive while syncing', desk.locator('#settingsDialog button:has-text("Get from Drive")').count() == 1)
-        desk.click('#settingsDialog button:has-text("Import from Excel…")')
+        settings_click(desk, '#settingsDialog button:has-text("Import from Excel…")')
         desk.wait_for_selector('#archiveImportDialog[open]')
         check('import page says when rows are left out', '1 Oct 2026' in desk.text_content('#archiveImportDialog'))
         desk.set_input_files('#archiveImportDialog input[type=file]', XLSX)
@@ -243,11 +240,11 @@ try:
         phone = device(b, 412, 915, True)
         setup(phone)
         connect(phone)
-        phone.click('#settingsDialog button:has-text("Get from Drive")')
+        settings_click(phone, '#settingsDialog button:has-text("Get from Drive")')
         toast_has(phone, 'History: 2024–2026 on this device')
         phone.wait_for_selector('#settingsDialog button:has-text("Open history")')
         check('phone: ⚙ now shows the years', '2024–2026' in phone.text_content('#settingsDialog'))
-        phone.click('#settingsDialog button:has-text("Open history")')
+        settings_click(phone, '#settingsDialog button:has-text("Open history")')
         phone.wait_for_selector('#archiveDialog[open] .arch-list')
         check('phone: a list, not the wide grid', phone.locator('#archiveDialog table').count() == 0)
         days = phone.eval_on_selector_all('#archiveDialog .arch-list > .day', 'els => els.map(e => e.textContent)')
@@ -275,7 +272,7 @@ try:
 
         # ================================================================ import again replaces a year
         open_settings(desk)
-        desk.click('#settingsDialog button:has-text("Import again…")')
+        settings_click(desk, '#settingsDialog button:has-text("Import again…")')
         desk.set_input_files('#archiveImportDialog input[type=file]', XLSX)
         desk.wait_for_selector('#archiveImportDialog .arch-sheet')
         names = desk.eval_on_selector_all('#archiveImportDialog .arch-group input', 'els => els.map(e => e.value)')
@@ -297,7 +294,7 @@ try:
         # ================================================================ delete
         dialogs.clear()
         open_settings(desk)
-        desk.click('#settingsDialog button:has-text("Delete imported history…")')
+        settings_click(desk, '#settingsDialog button:has-text("Delete imported history…")')
         toast_has(desk, 'Imported history deleted')
         check('delete: asked first, mentioning Drive’s bin and that accounts are untouched', dialogs and 'bin' in dialogs[-1] and 'not touched' in dialogs[-1], dialogs[-1:] )
         check('delete: Drive files moved to the bin', archive_files() == [] and len(archive_files(include_trashed=True)) == 3, archive_files(True))
@@ -311,7 +308,7 @@ try:
         # ================================================================ erase removes it on the phone
         dialogs.clear()
         open_settings(phone)
-        phone.click('#settingsDialog button:has-text("Erase all data on this device")')
+        settings_click(phone, '#settingsDialog button:has-text("Erase all data on this device")')
         phone.wait_for_selector('.setup-form')
         n = phone.evaluate("""() => new Promise((res) => { const r = indexedDB.open('finance-tracker'); r.onsuccess = () => {
             const g = r.result.transaction('kv').objectStore('kv').get('archive'); g.onsuccess = () => res(g.result === undefined ? 'gone' : 'there'); }; })""")

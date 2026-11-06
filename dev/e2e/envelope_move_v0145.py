@@ -43,7 +43,7 @@ try:
 
         # ---- an account with two envelopes: Bills £600, Savings £400
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector(f'{A}[open]')
+        settings_click(pg, '#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector(f'{A}[open]')
         pg.fill(f'{A} input[placeholder="e.g. Monzo"]', 'Chase')
         pg.select_option(f'{A} select >> nth=0', 'savings')
         pg.fill(f'{A} .field-pair .amount-input', '1000')
@@ -54,7 +54,7 @@ try:
             pg.fill(f'{A} .env-set-row >> nth={i} >> .env-set-name', n)
             pg.fill(f'{A} .env-set-row >> nth={i} >> .env-set-open', v)
         save(pg, A, 'Account added')
-        pg.click('#settingsDialog .sheet-head .icon-btn')
+        close_settings(pg)
 
         # ---- editor: Move between envelopes
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')

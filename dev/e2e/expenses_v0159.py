@@ -143,10 +143,11 @@ try:
         # ---- ⚙ clean-up before anything's paid
         pg.click('#claimsDialog .win-close')
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        check('⚙ Expense claims section', pg.locator('#settingsDialog h3:has-text("Expense claims")').count() == 1)
-        pg.click('#settingsDialog button:has-text("Delete receipts of paid claims")'); pg.wait_for_timeout(300)
+        open_settings(pg, 'expenses')  # v0.15.21: Settings is a menu of pages now
+        check('⚙ Expense claims section', pg.is_visible('#settingsDialog button:has-text("Delete receipts of paid claims")'))
+        settings_click(pg, '#settingsDialog button:has-text("Delete receipts of paid claims")'); pg.wait_for_timeout(300)
         check('clean-up with none paid nudges to mark Paid', dialogs and dialogs[-1].startswith('No claims are marked as paid yet'), dialogs[-1:])
-        pg.click('#settingsDialog button:has-text("Claim list")'); pg.wait_for_selector('#claimsDialog[open]')
+        settings_click(pg, '#settingsDialog button:has-text("Claim list")'); pg.wait_for_selector('#claimsDialog[open]')
 
         pg.click('#claimsDialog .exp-toClaim .exp-tick:has-text("Submitted")'); pg.wait_for_timeout(400)
         check('ticked → Submitted', pg.locator('#claimsDialog .exp-submitted .exp-row').count() == 1)
@@ -167,8 +168,11 @@ try:
         pg.click('#claimsDialog button:has-text("Fill in 2 claims")'); pg.wait_for_selector('#txDialog[open]')
         check('each opens with Business expense ticked, "Claim 1 of 2"', pg.is_checked('#txDialog .exp-fields label.check input') and 'Claim 1 of 2' in pg.text_content('#txDialog'))
         check('…oldest first (Fuel)', pg.input_value('#txDialog input[list=descList]') == 'Fuel')
-        pg.fill('#txDialog .exp-details', 'Mileage — client visit'); save_entry(pg)
-        pg.wait_for_selector('#txDialog[open]')
+        pg.fill('#txDialog .exp-details', 'Mileage — client visit')
+        # saving claim 1 closes and at once reopens the window for claim 2: wait for claim 2 itself
+        # (waiting for "closed" first could miss that moment under load)
+        pg.click('#txDialog button[type=submit]')
+        pg.wait_for_function("document.getElementById('txDialog').open && document.getElementById('txDialog').textContent.includes('Claim 2 of 2')")
         check('then the next one (Coffee, 2 of 2)', pg.input_value('#txDialog input[list=descList]') == 'Coffee' and 'Claim 2 of 2' in pg.text_content('#txDialog'))
         save_entry(pg)
         heads = pg.eval_on_selector_all('#claimsDialog .exp-head', 'els => els.map(e => e.textContent)')
@@ -187,25 +191,29 @@ try:
 
         # ---- clean-up with a paid claim (⚙ is still open under the claim list)
         pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Delete receipts of paid claims")'); pg.wait_for_timeout(500)
+        settings_click(pg, '#settingsDialog button:has-text("Delete receipts of paid claims")'); pg.wait_for_timeout(500)
         check('clean-up asks with count and size (photo + PDF)', dialogs[-1].startswith('Delete 2 receipts (') and 'of 1 paid claim' in dialogs[-1], dialogs[-1][:60])
         check('…and deletes it, claim kept', photo_count(pg) == 0 and '"status":"paid"' in ledger_json(pg))
-        pg.click('#settingsDialog button:has-text("Delete receipts of paid claims")'); pg.wait_for_timeout(300)
+        settings_click(pg, '#settingsDialog button:has-text("Delete receipts of paid claims")'); pg.wait_for_timeout(300)
         check('again: nothing to delete', dialogs[-1].startswith('Nothing to delete'), dialogs[-1][:40])
 
         # ---- untick the account: hidden, not deleted
+        open_settings(pg, 'accounts')
         pg.click('#settingsDialog .acc-list li:has-text("MBNA") button:has-text("Edit")'); pg.wait_for_selector('#accountDialog[open]')
         pg.uncheck('#accountDialog label.check:has-text("Can have expense claims") input')
         pg.click('#accountDialog button[type=submit]'); pg.wait_for_timeout(400)
-        check('unticked: no Expense claims in ⚙, no Claims…', pg.locator('#settingsDialog h3:has-text("Expense claims")').count() == 0)
+        open_settings(pg, 'expenses')
+        check('unticked: no Expense claims in ⚙, no Claims…', not pg.is_visible('#settingsDialog button:has-text("Delete receipts of paid claims")')
+              and pg.is_visible('#settingsDialog button:has-text("Go to Accounts")'))
         check('…but the claims are still on the entries', ledger_json(pg).count('"expense"') == 3)
 
         # ---- grid header button when ticked again
+        open_settings(pg, 'accounts')
         pg.click('#settingsDialog .acc-list li:has-text("MBNA") button:has-text("Edit")'); pg.wait_for_selector('#accountDialog[open]')
         pg.check('#accountDialog label.check:has-text("Can have expense claims") input')
         pg.click('#accountDialog button[type=submit]'); pg.wait_for_timeout(300)
-        pg.click('#settingsDialog .seg-btn:has-text("Grid")'); pg.wait_for_timeout(300)
-        pg.click('#settingsDialog .sheet-head button[aria-label=Close]')
+        settings_click(pg, '#settingsDialog .seg-btn:has-text("Grid")'); pg.wait_for_timeout(300)
+        close_settings(pg)
         pg.wait_for_selector('table.grid')
         check('grid: receipt-icon button on the ticked account only', pg.locator('.acc-claims svg').count() == 1)
         check('grid: line-icon mark on claim rows', pg.locator('table.grid .exp-mark svg').count() == 3)

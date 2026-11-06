@@ -15,7 +15,7 @@ def check(label, ok, detail=''):
     checks.append((label, bool(ok))); print(('PASS ' if ok else 'FAIL ') + label + (f'  [{detail}]' if detail else ''))
 def toast_has(pg, text, timeout=8000):
     pg.wait_for_function('t => { const e = document.getElementById("toast"); return e && !e.hidden && e.textContent.includes(t); }', arg=text, timeout=timeout)
-def hide_toast(pg): pg.evaluate('document.getElementById("toast").hidden = true')
+def hide_toast(pg): pg.evaluate('(document.getElementById("toast") || {}).hidden = true')
 def watch(page, label):
     page.on('console', lambda m: m.type == 'error' and 'ERR_' not in m.text and 'accounts.google.com' not in m.text and errors.append(f'{label} console: {m.text}'))
     page.on('pageerror', lambda e: errors.append(f'{label} pageerror: {e}'))
@@ -39,10 +39,6 @@ def folder_name(f): return drive[f['parent']]['name'] if f['parent'] in drive el
 def idb_keys(pg):
     return pg.evaluate("""() => new Promise((res) => { const r = indexedDB.open('finance-tracker', 1);
       r.onsuccess = () => { const q = r.result.transaction('kv').objectStore('kv').getAllKeys(); q.onsuccess = () => res(q.result.sort()); }; })""")
-def open_settings(pg):
-    pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-def close_settings(pg):
-    if pg.is_visible('#settingsDialog[open]'): pg.click('#settingsDialog .sheet-head .icon-btn')
 def wait_synced(pg):
     pg.wait_for_function('() => !/Syncing/.test(document.getElementById("syncChip").textContent) && !document.querySelector(".sync-joint-busy")', timeout=8000)
 def tap_sync_both(pg):
@@ -59,19 +55,19 @@ try:
         desk.fill('.setup-form input[type=date]', '2026-10-01')
         desk.click('.setup-form button[type=submit]'); desk.wait_for_selector('table.grid')
         open_settings(desk)
-        desk.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(desk, '#settingsDialog button:has-text("Connect Google Drive")')
         desk.wait_for_function('() => /Synced/.test(document.getElementById("syncChip").textContent)', timeout=8000)
         personal_v = named('personal.json')[0]['version']
 
         # ---- off by default: nothing joint anywhere
-        st = desk.text_content('#settingsDialog')
+        st = settings_text(desk, 'joint')
         check('off by default: ⚙ offers "Turn on"', 'Joint account' in st and desk.locator('#settingsDialog .joint-section button:has-text("Turn on")').count() == 1)
         check('off: no joint records on this device', not any(k.startswith('joint') for k in idb_keys(desk)), idb_keys(desk))
         check('off: no joint dot on the chip', joint_dot(desk) is None)
         check('off: no joint file on Drive', named('joint.json') == [])
 
         # ---- turn on (first device): file made, then the opening balance asked for
-        desk.click('#settingsDialog .joint-section button:has-text("Turn on")')
+        settings_click(desk, '#settingsDialog .joint-section button:has-text("Turn on")')
         desk.wait_for_selector('#settingsDialog .joint-setup', timeout=8000)
         check('turn on → joint.json made in its own "Finance Joint" folder', len(named('joint.json')) == 1 and folder_name(named('joint.json')[0]) == 'Finance Joint', [folder_name(f) for f in named('joint.json')])
         check('setup form defaults the date to your opening date (1 Oct 2026)', desk.input_value('#settingsDialog .joint-setup input[type=date]') == '2026-10-01')
@@ -149,13 +145,13 @@ try:
         phone = device(b, 360, 780, True)
         phone.wait_for_selector('.setup-form')
         open_settings(phone)
-        phone.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(phone, '#settingsDialog button:has-text("Connect Google Drive")')
         phone.wait_for_selector('.feed', timeout=8000)
         close_settings(phone)
         tabs = phone.eval_on_selector_all('.tab-name', 'els => els.map(e => e.textContent)')
         check('phone: joint off there → no joint tab', 'Joint account' not in tabs, tabs)
         open_settings(phone)
-        phone.click('#settingsDialog .joint-section button:has-text("Turn on")')
+        settings_click(phone, '#settingsDialog .joint-section button:has-text("Turn on")')
         toast_has(phone, 'Joint account on')
         check('phone: turning on found the existing file (no second file, no setup form)', len(named('joint.json')) == 1 and phone.locator('#settingsDialog .joint-setup').count() == 0)
         close_settings(phone)
@@ -201,7 +197,7 @@ try:
         # ---- turn off on the desktop: gone from screen, Drive untouched; back on = no setup, same file
         open_settings(desk)
         jv = named('joint.json')[0]['version']
-        desk.click('#settingsDialog .joint-section button:has-text("Turn off on this device")')
+        settings_click(desk, '#settingsDialog .joint-section button:has-text("Turn off on this device")')
         toast_has(desk, 'Joint account off')
         close_settings(desk)
         heads = desk.eval_on_selector_all('.acc-head .acc-name', 'els => els.map(e => e.textContent)')
@@ -212,7 +208,7 @@ try:
         hide_toast(desk); desk.click('#syncChip'); toast_has(desk, 'Synced with Google Drive')
         check('off: chip tap syncs personal only (old message)', True)
         open_settings(desk)
-        desk.click('#settingsDialog .joint-section button:has-text("Turn on")')
+        settings_click(desk, '#settingsDialog .joint-section button:has-text("Turn on")')
         toast_has(desk, 'Joint account on')
         close_settings(desk)
         check('back on: joint column back with the phone’s change', 'Joint account' in desk.text_content('.acc-head >> nth=0') and '34.00' in desk.text_content('table.grid'))
@@ -221,14 +217,14 @@ try:
         # ---- exports: a joint export can't go into your own data
         open_settings(desk)
         with desk.expect_download() as dl:
-            desk.click('#settingsDialog button:has-text("Download joint export")')
+            settings_click(desk, '#settingsDialog button:has-text("Download joint export")')
         path = dl.value.path(); jname = dl.value.suggested_filename
         check('joint export named finance-joint-…', jname.startswith('finance-joint-2026-10-07'), jname)
         exported = json.load(open(path))['ledger']
         check('joint export holds the joint file only', exported['name'] == 'Joint' and len(exported['accounts']) == 1)
         close_settings(desk)
         open_settings(phone)
-        phone.click('#settingsDialog .joint-section button:has-text("Turn off on this device")')
+        settings_click(phone, '#settingsDialog .joint-section button:has-text("Turn off on this device")')
         toast_has(phone, 'Joint account off')
         hide_toast(phone)
         phone.set_input_files('#importInput', path)
@@ -238,9 +234,9 @@ try:
 
         # ---- erase on the phone: joint goes too (local only)
         open_settings(phone)
-        phone.click('#settingsDialog .joint-section button:has-text("Turn on")')
+        settings_click(phone, '#settingsDialog .joint-section button:has-text("Turn on")')
         toast_has(phone, 'Joint account on')
-        phone.click('#settingsDialog button:has-text("Erase all data on this device")')
+        settings_click(phone, '#settingsDialog button:has-text("Erase all data on this device")')
         phone.wait_for_selector('.setup-form', timeout=8000)
         keys = idb_keys(phone)
         check('erase: joint data gone from the device', 'jointLedger' not in keys and 'jointSync' not in keys, keys)
@@ -250,9 +246,9 @@ try:
         dark = device(b, 1440, 900, False, 'dark')
         dark.wait_for_selector('.setup-form')
         open_settings(dark)
-        dark.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(dark, '#settingsDialog button:has-text("Connect Google Drive")')
         dark.wait_for_selector('table.grid', timeout=8000)
-        dark.click('#settingsDialog .joint-section button:has-text("Turn on")')
+        settings_click(dark, '#settingsDialog .joint-section button:has-text("Turn on")')
         toast_has(dark, 'Joint account on')
         close_settings(dark)
         dark.screenshot(path=f'{OUT}/v014-5-desk-dark.png')
@@ -260,7 +256,7 @@ try:
 
         # ---- passphrase lock on: the joint records are encrypted too, and come back after unlocking
         open_settings(dark)
-        dark.click('#settingsDialog button:has-text("Turn on passphrase lock")'); dark.wait_for_selector('#lockDialog[open]')
+        settings_click(dark, '#settingsDialog button:has-text("Turn on passphrase lock")'); dark.wait_for_selector('#lockDialog[open]')
         dark.fill('#lockNew', 'blue kettle river'); dark.fill('#lockAgain', 'blue kettle river')
         dark.click('#lockDialog button[type=submit]')
         dark.wait_for_selector('#lockDialog[open]', state='detached', timeout=15000)

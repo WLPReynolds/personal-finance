@@ -113,7 +113,7 @@ try:
         manager_text = norm(pg.text_content('#recurringDialog'))
         check('TV subscription every 6 months, next 25 Feb 2027', 'Every 6 months on the 25th' in manager_text and 'Thu 25 Feb 2027' in manager_text, manager_text)
         pg.screenshot(path=f'{OUT}/r3-manager.png')
-        pg.click('#recurringDialog .icon-btn'); pg.click('#settingsDialog .icon-btn')
+        pg.click('#recurringDialog .icon-btn'); close_settings(pg)
 
         # ---- phone feed
         rows = feed_rows(pg)

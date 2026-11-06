@@ -106,7 +106,7 @@ try:
         pg.click(f'{D} button[type=submit]'); pg.wait_for_selector(f'{D}[open]', state='detached'); saved(pg, 'Recurring item added')
         mgr = norm(pg.text_content('#recurringDialog'))
         check('manager shows "statement" and the rule', 'Statement balance · 25 days after the statement' in mgr and 'statement' in mgr, mgr[:200])
-        pg.click('#recurringDialog .icon-btn'); pg.click('#settingsDialog .icon-btn')
+        pg.click('#recurringDialog .icon-btn'); close_settings(pg)
 
         rows = feed_rows(pg)
         dd = [r for r in rows if 'Barclaycard direct debit' in r]

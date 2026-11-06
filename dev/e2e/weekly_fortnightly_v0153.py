@@ -64,7 +64,7 @@ try:
         mt = norm(pg.text_content('#recurringDialog'))
         check('manager: Weekly on Saturdays from 10 Oct 2026', 'Weekly on Saturdays from 10 Oct 2026' in mt, mt)
         pg.screenshot(path=f'{OUT}/wf2-manager.png')
-        pg.click('#recurringDialog .icon-btn'); pg.click('#settingsDialog .icon-btn')
+        pg.click('#recurringDialog .icon-btn'); close_settings(pg)
 
         def feed():
             return pg.evaluate('() => [...document.querySelectorAll(".feed .entry.projected")].map(e => e.innerText.replace(/\\s+/g," "))')

@@ -115,9 +115,9 @@ try:
         save_account(pg)
         toast_has(pg, 'Account updated')
         pg.wait_for_function('() => /Into overdraft/.test(document.querySelector(".acc-head .acc-lim")?.textContent ?? "")', timeout=5000)
-        txt = pg.text_content('.acc-head >> nth=0 >> .acc-lim')
+        txt = pg.text_content('.acc-head >> nth=0 >> .acc-lim').replace(',', '')  # "Tue, 20 Oct" or "Tue 20 Oct" depending on the browser
         # Council tax repeats, so by 20 Nov it really is past the £20 limit: both shown, the header red for the worse one
-        check('with a £20 overdraft: header says into overdraft from 20 Oct, past the limit from 20 Nov', 'Into overdraft from Tue, 20 Oct' in txt and 'Past overdraft limit from Fri, 20 Nov' in txt, txt)
+        check('with a £20 overdraft: header says into overdraft from 20 Oct, past the limit from 20 Nov', 'Into overdraft from Tue 20 Oct' in txt and 'Past overdraft limit from Fri 20 Nov' in txt, txt)
         amber = pg.eval_on_selector_all('td.lim-warn', 'els => els.map(e => e.textContent)')
         check('-£10 (inside the overdraft) is amber in the grid; -£60 (past it) red', '-10.00' in amber and '-60.00' in pg.eval_on_selector_all('td.lim-alert', 'els => els.map(e => e.textContent)'), amber)
         dialogs.clear()
@@ -165,7 +165,7 @@ try:
 
         # ---- loan / credit account
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector('#accountDialog[open]')
+        settings_click(pg, '#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector('#accountDialog[open]')
         pg.fill('#accountDialog input[placeholder="e.g. Monzo"]', 'Car loan')
         pg.select_option('#accountDialog select >> nth=0', 'loan')
         check('loan: amount owed label, no limits, note shown', pg.is_visible('#accountDialog span:text-is("Amount owed at opening date (£)")') and not pg.is_visible('#accountDialog .field:has-text("overdraft")') and pg.is_visible('#accountDialog p:has-text("money can’t be transferred out")'))
@@ -204,7 +204,7 @@ try:
         # ---- converting an existing negative account into a loan: the figure flips, no amounts change
         pg.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector('#accountDialog[open]')
+        settings_click(pg, '#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector('#accountDialog[open]')
         pg.fill('#accountDialog input[placeholder="e.g. Monzo"]', 'Very')
         pg.fill('#accountDialog .field-pair:has-text("Opening balance") .amount-input', '-600.00')
         pg.fill('#accountDialog input[type=date]', '2026-10-01')
@@ -223,7 +223,7 @@ try:
         # ---- v0.14.1: a loan with envelopes (Wayne's Klarna / Monzo Flex: several reasons to borrow on one account)
         pg.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector('#accountDialog[open]')
+        settings_click(pg, '#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector('#accountDialog[open]')
         A = '#accountDialog'
         pg.fill(f'{A} input[placeholder="e.g. Monzo"]', 'Klarna')
         pg.fill(f'{A} .field-pair:has-text("Opening balance") .amount-input', '-300.00')
@@ -265,7 +265,7 @@ try:
         # same browser storage? no — separate context; import by export instead
         with pg.expect_download() as dl:
             pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-            pg.click('#settingsDialog button:has-text("Download export")')
+            settings_click(pg, '#settingsDialog button:has-text("Download export")')
         ph.wait_for_selector('.setup-form')
         ph.set_input_files('#importInput', dl.value.path())
         ph.wait_for_selector('.feed', timeout=8000)

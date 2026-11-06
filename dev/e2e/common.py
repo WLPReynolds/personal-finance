@@ -9,7 +9,9 @@ OUT = os.path.join(os.path.dirname(__file__), 'shots')
 os.makedirs(OUT, exist_ok=True)
 
 def start_server(port):
-    """Serve the app folder on localhost. Returns (process, url)."""
+    """Serve the app folder on localhost. Returns (process, url).
+    E2E_PORT overrides the suite's own port, so suites can run side by side (several share a port)."""
+    port = int(os.environ.get('E2E_PORT', port))
     proc = subprocess.Popen([sys.executable, '-m', 'http.server', str(port)], cwd=ROOT,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
@@ -191,3 +193,68 @@ def fill_setup(pg, amounts, accounts=LEGACY_SETUP):
         card.locator('select').nth(0).select_option(typ)
         card.locator('select').nth(1).select_option(inst)
         card.locator('.amount-input').fill(amount)
+
+
+# ---- v0.15.21: Settings is a menu of pages (since v0.15.17), not one long sheet.
+# The older suites clicked '#settingsDialog button:has-text(...)' straight after opening ⚙.
+# These helpers open ⚙, find the page a control lives on, and close Settings fully
+# (on a page, ✕ only goes back to the menu).
+SETTINGS_PAGES = ['accounts', 'expenses', 'joint', 'drive', 'backups', 'history', 'tracker', 'layout', 'lock', 'device']
+
+def settings_page(pg):
+    """The open Settings page id, '' for the menu, None when Settings is closed."""
+    if not pg.is_visible('#settingsDialog[open]'):
+        return None
+    return pg.get_attribute('#settingsDialog', 'data-page') or ''
+
+def open_settings(pg, page=None):
+    """Open ⚙ Settings if it isn't open. page: None = leave it where it is (as the old helpers did),
+    '' = go to the menu, or a page id (e.g. 'accounts') = go to that page."""
+    cur = settings_page(pg)
+    if cur is None:
+        pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
+        cur = settings_page(pg)
+    if page is None or cur == page:
+        return
+    if cur:
+        pg.click('#settingsDialog .settings-back')
+        pg.wait_for_function('() => !document.getElementById("settingsDialog").dataset.page')
+    if page:
+        pg.click(f'#settingsDialog .settings-item[data-page={page}]')
+        pg.wait_for_function('p => document.getElementById("settingsDialog").dataset.page === p', arg=page)
+
+def settings_find(pg, selector):
+    """Open Settings at the page where `selector` is visible (current page first). Returns the page id."""
+    if settings_page(pg) is None:
+        open_settings(pg)
+    cur = settings_page(pg)
+    if cur and pg.locator(selector).first.is_visible():
+        return cur
+    for page in SETTINGS_PAGES:
+        open_settings(pg, '')
+        if not pg.locator(f'#settingsDialog .settings-item[data-page={page}]').count():
+            continue  # e.g. Ticket tracker, only listed when something uses it
+        open_settings(pg, page)
+        if pg.locator(selector).first.is_visible():
+            return page
+    raise AssertionError(f'not on any Settings page: {selector}')
+
+def settings_click(pg, selector):
+    settings_find(pg, selector)
+    pg.click(selector)
+
+def close_settings(pg):
+    """Close Settings completely, from the menu or from a page."""
+    for _ in range(3):
+        if not pg.is_visible('#settingsDialog[open]'):
+            return
+        pg.click('#settingsDialog .sheet-head .icon-btn')
+        pg.wait_for_timeout(50)
+
+def settings_text(pg, *pages):
+    """The text of the given Settings pages (the menu for ''), as one string; ends on the last page."""
+    out = []
+    for page in pages:
+        open_settings(pg, page)
+        out.append(pg.text_content('#settingsDialog'))
+    return '\n'.join(out)

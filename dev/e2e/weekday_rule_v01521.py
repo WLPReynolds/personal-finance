@@ -7,7 +7,7 @@ from common import *
 from playwright.sync_api import sync_playwright
 import datetime
 
-server, URL = start_server(8775)
+server, URL = start_server(8790)
 errors, checks = [], []
 D = '#recurringEditDialog'
 FREQ = f'{D} .field-pair >> nth=1 >> select'
@@ -85,7 +85,7 @@ try:
         mt = norm(pg.text_content('#recurringDialog'))
         check('manager: Monthly · last Friday of the month', 'Monthly · last Friday of the month' in mt, mt)
         pg.screenshot(path=f'{OUT}/wr2-manager.png')
-        pg.click('#recurringDialog .icon-btn'); pg.click('#settingsDialog .icon-btn')
+        pg.click('#recurringDialog .icon-btn'); close_settings(pg)
 
         def feed(name):
             # day headers (li.day) are siblings: walk back from each entry to its header
