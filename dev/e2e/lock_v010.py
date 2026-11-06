@@ -37,10 +37,6 @@ def add_spend(pg, amount, desc):
     pg.click('#txDialog button[type=submit]')
     pg.wait_for_selector(f'.desc-text:text-is("{desc}")')
 
-def open_settings(pg):
-    if not pg.evaluate("document.getElementById('settingsDialog').open"):
-        pg.click('#settingsBtn')
-    pg.wait_for_selector('#settingsDialog[open]')
 
 def unlock(pg, passphrase):
     pg.wait_for_selector('.lock-screen')
@@ -66,16 +62,16 @@ try:
         add_spend(pg, '12.34', 'Coffee beans')
 
         # Drive on, then the lock
-        open_settings(pg)
+        open_settings(pg, 'lock')
         check(pg.is_visible('#settingsDialog button:has-text("Turn on passphrase lock")'), 'lock is off by default, offered in settings')
         check(not pg.is_visible('#lockBtn'), 'no lock button in the top bar while off')
-        pg.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(pg, '#settingsDialog button:has-text("Connect Google Drive")')
         pg.wait_for_function("() => /Synced/.test(document.getElementById('syncChip').textContent)", timeout=8000)
         check(pg.evaluate("Boolean(localStorage.getItem('ft.googleToken'))"), 'without the lock the token is in localStorage (as before)')
         check(raw(pg)['ledger']['accounts'][0]['name'] != '', 'without the lock the ledger is stored plain')
 
         open_settings(pg)
-        pg.click('#settingsDialog button:has-text("Turn on passphrase lock")'); pg.wait_for_selector('#lockDialog[open]')
+        settings_click(pg, '#settingsDialog button:has-text("Turn on passphrase lock")'); pg.wait_for_selector('#lockDialog[open]')
         pg.screenshot(path=f'{OUT}/lock-1-turn-on.png')
         pg.fill('#lockNew', 'short'); pg.fill('#lockAgain', 'short'); pg.click('#lockDialog button[type=submit]')
         check('at least 8' in pg.inner_text('#lockDialog [role=alert]'), 'short passphrase refused')
@@ -93,7 +89,7 @@ try:
         check(r['vault']['autoLockMinutes'] == 5 and r['vault']['kdf']['iterations'] == 600000, 'header: 5 minutes, 600k rounds')
         check(not pg.evaluate("localStorage.getItem('ft.googleToken')"), 'token removed from localStorage')
         check(pg.evaluate("!document.getElementById('lockBtn').hidden"), 'lock button switched on (hidden by CSS on a phone-width screen)')
-        pg.click('#settingsDialog button[aria-label=Close]')
+        close_settings(pg)
 
         # a save while on stays encrypted
         add_spend(pg, '3.50', 'Parking')
@@ -117,7 +113,7 @@ try:
         check(parking_on_drive, 'Drive copy (plain, by choice) has the entry')
 
         # Lock now (top bar)
-        open_settings(pg); pg.click('#settingsDialog button:has-text("Lock now")'); pg.wait_for_selector('.lock-screen')
+        open_settings(pg); settings_click(pg, '#settingsDialog button:has-text("Lock now")'); pg.wait_for_selector('.lock-screen')
         check(True, 'Lock now (settings) → lock screen')
         unlock(pg, 'blue kettle river'); pg.wait_for_selector('.feed')
 
@@ -134,11 +130,11 @@ try:
         unlock(pg, 'blue kettle river'); pg.wait_for_selector('.feed')
 
         # change auto-lock time and passphrase
-        open_settings(pg)
+        open_settings(pg, 'lock')
         pg.select_option('#settingsDialog select[aria-label="Lock after"]', '30')
         pg.wait_for_timeout(300)
         check(raw(pg)['vault']['autoLockMinutes'] == 30, 'auto-lock time saved')
-        pg.click('#settingsDialog button:has-text("Change passphrase")'); pg.wait_for_selector('#lockDialog[open]')
+        settings_click(pg, '#settingsDialog button:has-text("Change passphrase")'); pg.wait_for_selector('#lockDialog[open]')
         pg.fill('#lockCurrent', 'not it at all'); pg.fill('#lockNew', 'green teapot hill'); pg.fill('#lockAgain', 'green teapot hill')
         pg.click('#lockDialog button[type=submit]')
         pg.wait_for_selector('#lockDialog [role=alert]:has-text("isn’t right")')
@@ -152,7 +148,7 @@ try:
 
         # turn off
         open_settings(pg)
-        pg.click('#settingsDialog button:has-text("Turn off")'); pg.wait_for_selector('#lockDialog[open]')
+        settings_click(pg, '#settingsDialog button:has-text("Turn off")'); pg.wait_for_selector('#lockDialog[open]')
         pg.fill('#lockCurrent', 'blue kettle river'); pg.click('#lockDialog button[type=submit]')
         pg.wait_for_selector('#lockDialog [role=alert]:has-text("isn’t right")')
         pg.fill('#lockCurrent', 'green teapot hill'); pg.click('#lockDialog button[type=submit]')
@@ -166,7 +162,7 @@ try:
 
         # forgot passphrase
         open_settings(pg)
-        pg.click('#settingsDialog button:has-text("Turn on passphrase lock")'); pg.wait_for_selector('#lockDialog[open]')
+        settings_click(pg, '#settingsDialog button:has-text("Turn on passphrase lock")'); pg.wait_for_selector('#lockDialog[open]')
         pg.fill('#lockNew', 'forget me later'); pg.fill('#lockAgain', 'forget me later'); pg.click('#lockDialog button[type=submit]')
         pg.wait_for_selector('#lockDialog[open]', state='detached', timeout=15000)
         pg.reload(); pg.wait_for_selector('.lock-screen')
@@ -177,7 +173,7 @@ try:
         check(len(drive_files()) == before and 'Parking' in drive_files()[0]['text'], 'forgot: Drive file untouched')
         check(not pg.evaluate("localStorage.getItem('ft.googleToken')"), 'forgot: no token left behind')
         open_settings(pg)
-        pg.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(pg, '#settingsDialog button:has-text("Connect Google Drive")')
         pg.wait_for_selector('.desc-text:text-is("Parking")', state='attached', timeout=10000)
         check(True, 'forgot: reconnecting Drive brings everything back')
         b.close()
@@ -192,10 +188,10 @@ try:
             fill_setup(q, ['3600', '6', '1000'])
             q.click('.setup-form button[type=submit]'); q.wait_for_selector('.grid, .feed')
             open_settings(q)
-            q.click('#settingsDialog button:has-text("Turn on passphrase lock")'); q.wait_for_selector('#lockDialog[open]')
+            settings_click(q, '#settingsDialog button:has-text("Turn on passphrase lock")'); q.wait_for_selector('#lockDialog[open]')
             q.fill('#lockNew', 'blue kettle river'); q.fill('#lockAgain', 'blue kettle river'); q.click('#lockDialog button[type=submit]')
             q.wait_for_selector('#lockDialog[open]', state='detached', timeout=15000)
-            q.click('#settingsDialog button[aria-label=Close]')
+            close_settings(q)
             q.screenshot(path=f'{OUT}/lock-5-desktop-open-{scheme}.png')
             check(q.is_visible('#lockBtn'), f'{scheme}: desktop top bar shows the lock button')
             q.click('#lockBtn'); q.wait_for_selector('.lock-screen')

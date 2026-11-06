@@ -9,6 +9,7 @@ import {
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
   projections, withProjections, seriesDates, upcomingDates, horizonEnd, describeRule,
   recurringItems, occurrenceExceptions, itemNumbering, numberLabel, nominalDate, seriesFinished, isDateKeyed,
+  weekdayRuleDay, frequencyChangeBlocked,
 } from '../schedule.js';
 import { emptyLedger, addAccount, addTransaction, deleteTransaction, updateTransaction, balanceAsOf, accountRunning } from '../ops.js';
 import { buildGridRows } from '../grid.js';
@@ -617,6 +618,151 @@ test('a last payment moved past the end date by a one-off date still counts as t
   const { ledger: l0, item } = addRecurring(s.ledger, base(s.current.id, { endDate: '2026-10-31' }));
   const moved = setOccurrence(l0, item.id, '2026-10', { date: '2026-11-03' });
   assert.equal(seriesFinished(moved, item, HOL), false);
+});
+
+console.log('v0.15.21 — weekday of the month');
+const FRI = 5;
+const ppl = (accountId, extra = {}) => base(accountId, {
+  description: 'Postcode Lottery', amount: 1250, day: 1, startDate: '2025-12-01', shift: 'after',
+  weekdayRule: { weekday: FRI, onOrAfter: 4 }, ...extra,
+});
+test('PPL: first Friday on or after the 4th matches every real and published collection (Dec 2025 – Nov 2026)', () => {
+  const real = ['2025-12-05', '2026-01-09', '2026-02-06', '2026-03-06', '2026-04-10', '2026-05-08', '2026-06-05',
+    '2026-07-10', '2026-08-07', '2026-09-04', '2026-10-09', '2026-11-06'];
+  const s = setup();
+  const { item } = addRecurring(s.ledger, ppl(s.current.id));
+  assert.deepEqual(dates(item, '2026-11-30'), real);
+});
+test('PPL: Dec 2026 by the rule is Fri 4 Dec; the 2027 projections', () => {
+  const r = { weekday: FRI, onOrAfter: 4 };
+  assert.equal(weekdayRuleDay(r, 2026, 12), 4);
+  const days2027 = [8, 5, 5, 9, 7, 4, 9, 6, 10, 8, 5, 10];
+  for (let m = 1; m <= 12; m++) assert.equal(weekdayRuleDay(r, 2027, m), days2027[m - 1], `month ${m}`);
+});
+test('a month starting on each weekday stays within the 4th–10th', () => {
+  const r = { weekday: FRI, onOrAfter: 4 };
+  const seen = new Set();
+  for (let m = 1; m <= 12; m++) { // 2026 has months starting on all seven weekdays
+    seen.add(new Date(Date.UTC(2026, m - 1, 1)).getUTCDay());
+    const d = weekdayRuleDay(r, 2026, m);
+    assert.ok(d >= 4 && d <= 10, `month ${m}: ${d}`);
+    assert.equal(new Date(Date.UTC(2026, m - 1, d)).getUTCDay(), FRI);
+  }
+  assert.equal(seen.size, 7);
+});
+test('onOrAfter 1 = plain first weekday; the day itself counts when it is that weekday', () => {
+  assert.equal(weekdayRuleDay({ weekday: FRI, onOrAfter: 1 }, 2026, 5), 1); // Fri 1 May
+  assert.equal(weekdayRuleDay({ weekday: FRI, onOrAfter: 4 }, 2026, 9), 4); // Fri 4 Sep
+  assert.equal(weekdayRuleDay({ weekday: 2, onOrAfter: 8 }, 2026, 12), 8); // second Tuesday: Tue 8 Dec
+});
+test('last weekday: 28-, 29-, 30- and 31-day months, and a month ending on that weekday', () => {
+  const L = { weekday: FRI, last: true };
+  assert.equal(weekdayRuleDay(L, 2026, 2), 27); // 28 days
+  assert.equal(weekdayRuleDay(L, 2028, 2), 25); // 29 days
+  assert.equal(weekdayRuleDay(L, 2026, 4), 24); // 30 days
+  assert.equal(weekdayRuleDay(L, 2026, 10), 30); // 31 days
+  assert.equal(weekdayRuleDay(L, 2026, 7), 31); // Fri 31 Jul — the last day itself
+  assert.equal(weekdayRuleDay({ weekday: 6, last: true }, 2027, 2), 27); // Sat 27 Feb 2027
+});
+test('bank holiday on the day moves to the next working day (Good Friday 2034)', () => {
+  const s = setup();
+  const { item } = addRecurring(s.ledger, ppl(s.current.id, { startDate: '2034-04-01' }));
+  const hol = new Set(['2034-04-07', '2034-04-10']); // made-up list: Good Friday and Easter Monday
+  assert.equal(seriesDates(item, '2034-04-30', hol)[0].date, '2034-04-11');
+  assert.equal(seriesDates(item, '2034-04-30', hol)[0].period, '2034-04'); // still keyed by month
+});
+test('keyed by month: confirm, skip, and a one-off date (PPL 7 Dec 2026)', () => {
+  const s = setup();
+  const { ledger: l0, item } = addRecurring(s.ledger, ppl(s.current.id, { startDate: '2026-11-01' }));
+  assert.equal(isDateKeyed(item), false);
+  let l = confirmOccurrence(l0, item.id, '2026-11', { date: '2026-11-06', amount: 1250, description: 'Postcode Lottery' });
+  l = setOccurrence(l, item.id, '2026-12', { date: '2026-12-07' });
+  l = setOccurrence(l, item.id, '2027-01', { skipped: true });
+  const p = projections(l, '2027-02-28', HOL).filter((x) => x.itemId === item.id && !x.skipped);
+  assert.deepEqual(p.map((x) => x.date), ['2026-12-07', '2027-02-05']);
+});
+test('every N months and yearly with a weekday rule count from the start month', () => {
+  const s = setup();
+  const q = addRecurring(s.ledger, ppl(s.current.id, { startDate: '2026-11-01', everyMonths: 3, shift: 'none' })).item;
+  assert.deepEqual(dates(q, '2027-08-31'), ['2026-11-06', '2027-02-05', '2027-05-07', '2027-08-06']);
+  const y = addRecurring(s.ledger, ppl(s.current.id, { startDate: '2026-11-01', everyMonths: 12, weekdayRule: { weekday: FRI, last: true } })).item;
+  assert.deepEqual(dates(y, '2027-12-31'), ['2026-11-27', '2027-11-26']);
+});
+test('start and end dates inside the window', () => {
+  const s = setup();
+  const late = addRecurring(s.ledger, ppl(s.current.id, { startDate: '2026-11-07', shift: 'none' })).item;
+  assert.equal(dates(late, '2026-12-31')[0], '2026-12-04'); // 6 Nov is before the start
+  const ends = addRecurring(s.ledger, ppl(s.current.id, { startDate: '2026-10-01', endDate: '2026-11-05', shift: 'none' })).item;
+  assert.deepEqual(dates(ends, '2026-12-31'), ['2026-10-09']); // 6 Nov is after the end
+});
+test('stored item: clean rule, plus an approximate day for older devices (7 for PPL, 28 for last)', () => {
+  const s = setup();
+  const a = addRecurring(s.ledger, ppl(s.current.id, { weekdayRule: { weekday: FRI, onOrAfter: 4, junk: 1 } })).item;
+  assert.deepEqual(a.weekdayRule, { weekday: FRI, onOrAfter: 4 });
+  assert.equal(a.day, 7);
+  const b = addRecurring(s.ledger, ppl(s.current.id, { weekdayRule: { weekday: FRI, last: true } })).item;
+  assert.deepEqual(b.weekdayRule, { weekday: FRI, last: true });
+  assert.equal(b.day, 28);
+  // an older device ignores weekdayRule and shows the fixed day
+  const { weekdayRule, ...older } = a;
+  assert.equal(dates(older, '2026-12-31').at(-1), '2026-12-07');
+});
+test('validation: weekday 0–6, on-or-after 1–28', () => {
+  const s = setup();
+  for (const bad of [{ weekday: 7, onOrAfter: 4 }, { weekday: -1, last: true }, { weekday: 1.5, onOrAfter: 4 }]) {
+    assert.throws(() => addRecurring(s.ledger, ppl(s.current.id, { weekdayRule: bad })), /Choose a weekday/);
+  }
+  for (const bad of [0, 29, 4.5, NaN]) {
+    assert.throws(() => addRecurring(s.ledger, ppl(s.current.id, { weekdayRule: { weekday: FRI, onOrAfter: bad } })), /On or after/);
+  }
+  assert.equal(addRecurring(s.ledger, ppl(s.current.id, { weekdayRule: { weekday: 0, onOrAfter: 28 } })).item.weekdayRule.onOrAfter, 28);
+});
+test('ignored with every N days or a statement payment', () => {
+  const s = setup();
+  assert.equal(addRecurring(s.ledger, ppl(s.current.id, { everyDays: 14 })).item.weekdayRule, null);
+});
+test('describeRule for weekday rules', () => {
+  assert.equal(describeRule(ppl('a')), 'Monthly · first Friday on or after the 4th · next working day');
+  assert.equal(describeRule(ppl('a', { shift: 'none', weekdayRule: { weekday: FRI, last: true } })), 'Monthly · last Friday of the month');
+  assert.equal(describeRule(ppl('a', { shift: 'none', weekdayRule: { weekday: 1, onOrAfter: 1 } })), 'Monthly · first Monday of the month');
+  assert.equal(describeRule(ppl('a', { shift: 'none', everyMonths: 3 })), 'Every 3 months · first Friday on or after the 4th');
+  assert.equal(describeRule(ppl('a', { shift: 'none', everyMonths: 12 })), 'Yearly in December · first Friday on or after the 4th');
+});
+test('switching fixed day ↔ weekday rule is allowed with confirmed months (both keyed by month)', () => {
+  const s = setup();
+  const { ledger: l0, item } = addRecurring(s.ledger, base(s.current.id, { day: 6 }));
+  const l = confirmOccurrence(l0, item.id, '2026-10', { date: '2026-10-06', amount: 599, description: 'Netflix' });
+  const next = updateRecurring(l, item.id, { weekdayRule: { weekday: FRI, onOrAfter: 4 } });
+  const it = recurringItems(next)[0];
+  assert.equal(it.day, 7);
+  assert.equal(frequencyChangeBlocked(l, item, it), null);
+  assert.deepEqual(projections(next, '2026-12-31', HOL).filter((x) => x.itemId === item.id && !x.skipped).map((x) => x.date), ['2026-11-06', '2026-12-04']);
+  const back = recurringItems(updateRecurring(next, item.id, { weekdayRule: null, day: 6 }))[0];
+  assert.equal(back.weekdayRule, null);
+  assert.equal(back.day, 6);
+});
+test('an edit that doesn’t mention the rule keeps it', () => {
+  const s = setup();
+  const { ledger, item } = addRecurring(s.ledger, ppl(s.current.id));
+  assert.deepEqual(recurringItems(updateRecurring(ledger, item.id, { amount: 1300 }))[0].weekdayRule, { weekday: FRI, onOrAfter: 4 });
+});
+test('survives export / import and merges between devices', () => {
+  const s = setup();
+  const { ledger: l1, item } = addRecurring(s.ledger, ppl(s.current.id, { startDate: '2026-11-01' }));
+  const back = parseImport(JSON.stringify(buildExport(l1, 'test'))).ledger;
+  assert.deepEqual(recurringItems(back)[0].weekdayRule, { weekday: FRI, onOrAfter: 4 });
+  const a = confirmOccurrence(l1, item.id, '2026-11', { date: '2026-11-06', amount: 1250 });
+  const b = setOccurrence(l1, item.id, '2026-12', { date: '2026-12-07' });
+  const { merged, groups } = prepareMerge({ base: l1, local: a, remote: b });
+  assert.equal(groups.length, 0);
+  assert.deepEqual(projections(merged, '2026-12-31', HOL).filter((x) => x.itemId === item.id && !x.skipped).map((x) => x.date), ['2026-12-07']);
+});
+test('items saved before v0.15.21 (no weekdayRule) are unchanged', () => {
+  const s = setup();
+  const { item } = addRecurring(s.ledger, base(s.current.id));
+  assert.equal(item.weekdayRule, null);
+  assert.equal(item.day, 7);
+  assert.equal(describeRule(item), 'Monthly on the 7th');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

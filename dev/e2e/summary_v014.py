@@ -90,14 +90,13 @@ try:
         check('reopening the app lands on the Summary', ph.locator('.summary').count() == 1)
 
         # ⚙ setting: open on the first account instead
-        ph.click('#settingsBtn'); ph.wait_for_selector('#settingsDialog[open]')
-        st = ph.text_content('#settingsDialog')
+        st = settings_text(ph, 'layout')
         check('⚙ Layout: "In the list (phone), open on: Summary / First account"', 'open on:' in st and 'First account' in st)
-        ph.click('#settingsDialog .seg-btn:has-text("First account")')
+        settings_click(ph, '#settingsDialog .seg-btn:has-text("First account")')
         ph.reload(); ph.wait_for_selector('.feed')
         check('setting "First account" → opens on the first account (Summary still a tab)', ph.locator('.summary').count() == 0 and ph.eval_on_selector_all('.tab-name', 'els => els[0].textContent') == 'Summary')
         ph.click('#settingsBtn'); ph.wait_for_selector('#settingsDialog[open]')
-        ph.click('#settingsDialog .seg-btn:has-text("Summary")')
+        settings_click(ph, '#settingsDialog .seg-btn:has-text("Summary")')
         ph.reload(); ph.wait_for_selector('.summary')
         check('and back to Summary', ph.locator('.summary').count() == 1)
 

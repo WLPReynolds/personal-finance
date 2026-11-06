@@ -42,9 +42,6 @@ def tab(pg, name):
 def entries(pg):
     return pg.evaluate('() => [...document.querySelectorAll(".feed .entry")].map(e => ({ cls: e.className, text: e.innerText.replace(/\\s+/g," ").replace(/,/g,"") }))')
 def banner(pg): return norm(pg.text_content('.banner .banner-amount'))
-def open_settings(pg):
-    pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-def close_settings(pg): pg.click('#settingsDialog .sheet-head .icon-btn')
 def bg(pg, sel):
     return pg.evaluate('s => getComputedStyle(document.querySelector(s)).backgroundColor', sel)
 def is_reddish(c):
@@ -76,10 +73,11 @@ try:
 
         put_tracker(tracker_file(TICKETS))
         open_settings(pg)
-        pg.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(pg, '#settingsDialog button:has-text("Connect Google Drive")')
         pg.wait_for_function('() => /Synced/.test(document.getElementById("syncChip").textContent)', timeout=8000)
 
         # ---- settings
+        open_settings(pg, 'tracker')  # v0.15.21: Ticket purchases sit on the Ticket tracker page
         sec = '#ticketSection'
         check('Ticket purchases section shown', pg.is_visible(sec))
         box = f'{sec} label.check input'
@@ -209,7 +207,7 @@ try:
         put_tracker(tracker_file(changed))
         open_settings(pg)
         hide_toast(pg)
-        pg.click('#trackerSection button:has-text("Check now")'); toast_has(pg, 'checked')
+        settings_click(pg, '#trackerSection button:has-text("Check now")'); toast_has(pg, 'checked')
         close_settings(pg)
         es = entries(pg)
         gone = [e for e in es if 'No longer in the ticket tracker' in e['text']]

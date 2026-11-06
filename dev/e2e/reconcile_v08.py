@@ -52,12 +52,12 @@ try:
 
         # ---- recurring manager: Add at the top, no duplicate at the bottom while empty
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         check('recurring: + Add in the header', pg.is_visible('#recurringDialog .sheet-head .rec-add-top'))
         check('recurring: only one Add button while empty', pg.locator('#recurringDialog .btn-primary').count() == 1)
         pg.click('#recurringDialog .rec-add-top'); pg.wait_for_selector('#recurringEditDialog[open]')
         check('top Add opens the editor', 'New recurring item' in pg.text_content('#recurringEditDialog'))
-        pg.click('#recurringEditDialog .icon-btn'); pg.click('#recurringDialog .sheet-head .icon-btn'); pg.click('#settingsDialog .icon-btn')
+        pg.click('#recurringEditDialog .icon-btn'); pg.click('#recurringDialog .sheet-head .icon-btn'); close_settings(pg)
 
         # ---- Barclaycard: statements on, entries
         pg.click('.tab:has-text("Barclaycard")'); pg.wait_for_timeout(200)

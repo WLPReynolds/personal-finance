@@ -50,7 +50,7 @@ import {
   MAX_HORIZON_MONTHS, horizonEnd, withProjections, recurringItems,
   addRecurring, updateRecurring, deleteRecurring, setOccurrence, confirmOccurrence,
   upcomingDates, describeRule, MIN_EVERY_DAYS, MAX_EVERY_DAYS, DATE_KEYED_BELOW_DAYS, frequencyChangeBlocked, itemNumbering, seriesAmount, numberLabel, statementCardFor, seriesFinished,
-  envelopeLegAccountId,
+  envelopeLegAccountId, WEEKDAY_NAMES, MAX_ON_OR_AFTER,
 } from './lib/schedule.js';
 import {
   DEFAULT_PAYMENT_DAYS, statementConfig, statementDate, paymentDueDate, statementFor, statementMonthByDate,
@@ -71,7 +71,7 @@ import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } f
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.20';
+export const APP_VERSION = '0.15.21';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -2707,6 +2707,18 @@ function openRecurringEditor(itemId) {
   const nDaysField = h('label', { class: 'field' }, h('span', {}, `Every how many days? (${MIN_EVERY_DAYS}–${MAX_EVERY_DAYS})`), nDays);
   const day = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', placeholder: '1–31', value: existing ? String(existing.day) : '' });
   const dayField = h('label', { class: 'field' }, h('span', {}, 'Day of the month'), day);
+  // v0.15.21: or a weekday — "first Friday on or after the 4th" (People's Postcode Lottery), "last Friday of the month"
+  const wr = existing?.weekdayRule ?? null;
+  const dayMode = h('select', {},
+    [['date', 'Day of month'], ['first', 'First weekday…'], ['last', 'Last weekday']].map(([v, l]) =>
+      h('option', { value: v, selected: v === (!wr ? 'date' : wr.last ? 'last' : 'first') }, l)));
+  const dayModeField = h('label', { class: 'field' }, h('span', {}, 'On'), dayMode);
+  const weekday = h('select', {},
+    [1, 2, 3, 4, 5, 6, 0].map((n) => h('option', { value: String(n), selected: n === (wr?.weekday ?? 5) }, WEEKDAY_NAMES[n])));
+  const onOrAfter = h('input', { type: 'text', inputmode: 'numeric', class: 'amount-input', placeholder: `1–${MAX_ON_OR_AFTER}`, value: wr && !wr.last ? String(wr.onOrAfter) : '1' });
+  const onOrAfterField = h('label', { class: 'field' }, h('span', {}, `On or after day (1–${MAX_ON_OR_AFTER})`), onOrAfter);
+  const weekdayPair = h('div', { class: 'field-pair' }, h('label', { class: 'field' }, h('span', {}, 'Weekday'), weekday), onOrAfterField);
+  const weekdayHint = h('div', { class: 'muted small' });
   const start = h('input', { type: 'date', required: true, value: existing?.startDate ?? todayIso() });
   const end = h('input', { type: 'date', value: existing?.endDate ?? '' });
   const finalAmt = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: 'amount-input', placeholder: 'same', value: existing?.finalAmount != null ? penceToInput(existing.finalAmount) : '' });
@@ -2731,7 +2743,7 @@ function openRecurringEditor(itemId) {
   const preview = h('div', { class: 'rec-preview' });
   const freqDayPair = h('div', { class: 'field-pair' },
     h('label', { class: 'field' }, h('span', {}, 'Repeats'), freq),
-    dayField);
+    dayModeField);
   const shiftField = h('label', { class: 'field' }, h('span', {}, 'If it lands on a weekend or bank holiday'), shift);
 
   function draft() {
@@ -2741,7 +2753,7 @@ function openRecurringEditor(itemId) {
         amount: amount.value.trim() === '' ? 0 : parseAmount(amount.value), everyMonths: 1, everyDays: null,
         day: Number.parseInt(day.value, 10) || existing?.day || 1,
         startDate: start.value, endDate: end.value || null, shift: 'after', finalAmount: null,
-        firstNumber: existing?.firstNumber ?? 1, payStatement: true, amountFrom: null,
+        firstNumber: existing?.firstNumber ?? 1, payStatement: true, amountFrom: null, weekdayRule: null,
         fromEnvelopeId: null, toEnvelopeId: null,
         envelopeSplits: envPicker.el.hidden ? null : envPicker.value().splits ?? null,
       };
@@ -2751,14 +2763,20 @@ function openRecurringEditor(itemId) {
     // every N days: whole numbers only ("90.5" or "90abc" is not 90)
     const everyDays = freq.value in FIXED_DAYS ? FIXED_DAYS[freq.value]
       : byDays ? (/^\s*\d+\s*$/.test(nDays.value) ? Number(nDays.value) : NaN) : null;
+    const byWeekday = !byDays && dayMode.value !== 'date';
+    const after = /^\s*\d+\s*$/.test(onOrAfter.value) ? Number(onOrAfter.value) : NaN;
+    const weekdayRule = !byWeekday ? null : dayMode.value === 'last' ? { weekday: Number(weekday.value), last: true }
+      : { weekday: Number(weekday.value), onOrAfter: after };
     return {
+      weekdayRule,
       payStatement: false,
       amountFrom: fromTracker.checked && kind !== 'move' ? TRACKER_SOURCE : null,
       fromEnvelopeId: kind === 'move' ? fromEnv.value || null : null,
       toEnvelopeId: kind === 'move' ? toEnv.value || null : null,
       description: desc.value, kind, accountId: account.value, toAccountId: kind === 'transfer' ? toAccount.value : null,
       amount: parseAmount(amount.value), everyMonths, everyDays,
-      day: byDays ? Number(start.value.slice(8, 10)) || 1 : Number.parseInt(day.value, 10),
+      day: byDays ? Number(start.value.slice(8, 10)) || 1
+        : byWeekday ? (weekdayRule.last ? 28 : Math.min(31, (after || 1) + 3)) : Number.parseInt(day.value, 10),
       startDate: start.value, endDate: end.value || null, shift: shift.value,
       finalAmount: end.value && finalAmt.value.trim() ? parseAmount(finalAmt.value) : null,
       firstNumber: end.value ? Number.parseInt(firstNo.value, 10) : (existing?.firstNumber ?? 1),
@@ -2798,7 +2816,14 @@ function openRecurringEditor(itemId) {
     nField.hidden = stmtOn || freq.value !== 'n';
     nDaysField.hidden = stmtOn || freq.value !== 'd';
     nDays.disabled = nDaysField.hidden; // a hidden, half-typed number mustn't block saving
-    dayField.hidden = freq.value === 'd' || freq.value in FIXED_DAYS;
+    const monthType = !(freq.value === 'd' || freq.value in FIXED_DAYS);
+    dayModeField.hidden = !monthType;
+    dayField.hidden = stmtOn || !monthType || dayMode.value !== 'date';
+    weekdayPair.hidden = stmtOn || !monthType || dayMode.value === 'date';
+    onOrAfterField.hidden = dayMode.value !== 'first';
+    weekdayHint.hidden = weekdayPair.hidden;
+    weekdayHint.textContent = dayMode.value === 'last' ? 'The last one in each month it’s due.'
+      : 'The first one on or after that day, so it falls within a week of it. For “the Friday between the 4th and 10th”, pick Friday and 4. Use 1 for the first in the month.';
     endFields.hidden = stmtOn || !end.value;
     startHint.textContent = freq.value in FIXED_DAYS && !stmtOn ? `The date of the first payment — it repeats ${freq.value === 'w' ? 'every week' : 'every two weeks'} on that weekday.`
       : freq.value === 'd' && !stmtOn ? 'The date of the first payment — it repeats every so many days from here.'
@@ -2811,6 +2836,8 @@ function openRecurringEditor(itemId) {
       text = next.length ? `Next: ${next.map(longDate).join(' · ')}` : 'No dates from today (ended).';
     } else if (d.everyDays != null && !(d.everyDays >= MIN_EVERY_DAYS && d.everyDays <= MAX_EVERY_DAYS)) {
       text = `Repeat every ${MIN_EVERY_DAYS} to ${MAX_EVERY_DAYS} days.`;
+    } else if (d.weekdayRule && !d.weekdayRule.last && !(d.weekdayRule.onOrAfter >= 1 && d.weekdayRule.onOrAfter <= MAX_ON_OR_AFTER)) {
+      text = `“On or after” day must be 1 to ${MAX_ON_OR_AFTER}.`;
     } else if (existing && frequencyChangeBlocked(state.ledger, existing, d)) { // v0.15.3: say so before Save
       text = frequencyChangeBlocked(state.ledger, existing, d);
     } else if (d.day >= 1 && d.day <= 31 && d.everyMonths >= 1 && d.everyMonths <= 12 && d.startDate) {
@@ -2839,7 +2866,12 @@ function openRecurringEditor(itemId) {
     preview.style.whiteSpace = 'pre-line';
     preview.hidden = !text;
   }
-  for (const el of [freq, nMonths, nDays, day, start, end, shift, finalAmt, firstNo, amount]) el.addEventListener('input', sync);
+  for (const el of [freq, nMonths, nDays, day, onOrAfter, start, end, shift, finalAmt, firstNo, amount]) el.addEventListener('input', sync);
+  for (const el of [dayMode, weekday]) el.addEventListener('change', sync);
+  // v0.15.21: a weekday rule is usually a direct debit, so a new choice of it defaults to the next working day (Wayne, 6 Nov)
+  dayMode.addEventListener('change', () => {
+    if (dayMode.value !== 'date' && shift.value === 'none' && !existing?.weekdayRule) { shift.value = 'after'; sync(); }
+  });
   for (const el of [freq, shift, account, toAccount, payStmt, fromTracker]) el.addEventListener('change', sync);
 
   const form = h('form', {
@@ -2852,6 +2884,7 @@ function openRecurringEditor(itemId) {
       if (d.amount === null) return toast('Enter an amount like 12.34', 'error');
       if (!d.payStatement && Number.isNaN(d.day)) return toast('Day of the month must be 1 to 31', 'error');
       if (Number.isNaN(d.everyMonths)) return toast('Repeat every 1 to 12 months', 'error');
+      if (d.weekdayRule && !d.weekdayRule.last && !(d.weekdayRule.onOrAfter >= 1 && d.weekdayRule.onOrAfter <= MAX_ON_OR_AFTER)) return toast(`“On or after” day must be 1 to ${MAX_ON_OR_AFTER}`, 'error');
       if (d.everyDays != null && !(d.everyDays >= MIN_EVERY_DAYS && d.everyDays <= MAX_EVERY_DAYS)) return toast(`Repeat every ${MIN_EVERY_DAYS} to ${MAX_EVERY_DAYS} days`, 'error');
       if (end.value && finalAmt.value.trim() && d.finalAmount === null) return toast('Enter the last payment like 12.34, or leave it blank', 'error');
       if (Number.isNaN(d.firstNumber)) return toast('First payment number must be 1 to 999', 'error');
@@ -2879,6 +2912,9 @@ function openRecurringEditor(itemId) {
   h('label', { class: 'field' }, amountLabel, amount, amountHint),
   envPicker.el,
   freqDayPair,
+  dayField,
+  weekdayPair,
+  weekdayHint,
   nField,
   nDaysField,
   h('div', { class: 'field-pair' },

@@ -50,7 +50,7 @@ try:
         print('1. chip before connecting:', chip(phone))
         phone.click('#settingsBtn'); phone.wait_for_selector('#settingsDialog[open]')
         phone.screenshot(path=f'{OUT}/d1-settings-connect.png')
-        phone.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(phone, '#settingsDialog button:has-text("Connect Google Drive")')
         wait_chip(phone, 'Synced')
         phone.wait_for_timeout(200)
         phone.screenshot(path=f'{OUT}/d2-settings-connected.png')
@@ -58,15 +58,15 @@ try:
         print('   after connect chip:', chip(phone), '| drive files:', len(drive_file()), '| folder names:', [f['name'] for f in drive.values() if f['folder']])
         print('   settings status line:', phone.inner_text('#driveStatusLine'))
         print('   stats:', phone.evaluate('window.__FT_TEST__.auth.stats()'))
-        phone.click('#settingsDialog .icon-btn[aria-label=Close]')
+        close_settings(phone)
 
         # ---------- desktop: fresh, connect from the setup screen's settings
         desk = new_device(b, 1440, 900)
         desk.wait_for_selector('.setup-form')
         desk.click('#settingsBtn'); desk.wait_for_selector('#settingsDialog[open]')
-        desk.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(desk, '#settingsDialog button:has-text("Connect Google Drive")')
         desk.wait_for_selector('table.grid', timeout=8000)
-        desk.click('#settingsDialog .icon-btn[aria-label=Close]') if desk.is_visible('#settingsDialog[open]') else None
+        close_settings(desk) if desk.is_visible('#settingsDialog[open]') else None
         rows = desk.eval_on_selector_all('table.grid tbody tr td.c-desc', 'els => els.map(e => e.textContent)')
         print('2. desktop joined; grid rows:', rows, '| chip:', chip(desk))
 

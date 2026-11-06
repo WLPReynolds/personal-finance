@@ -40,9 +40,6 @@ def put_tracker(text):
 
 def projected(pg):
     return pg.evaluate('() => [...document.querySelectorAll(".feed .entry.projected")].map(e => e.innerText.replace(/\\s+/g," ").replace(/,/g,""))')
-def open_settings(pg):
-    pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-def close_settings(pg): pg.click('#settingsDialog .sheet-head .icon-btn')
 def tap_sync(pg):
     hide_toast(pg); pg.click('#syncChip'); toast_has(pg, 'Synced')
 
@@ -67,14 +64,15 @@ try:
 
         put_tracker(tracker_file())
         open_settings(pg)
-        pg.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(pg, '#settingsDialog button:has-text("Connect Google Drive")')
         pg.wait_for_function('() => /Synced/.test(document.getElementById("syncChip").textContent)', timeout=8000)
+        open_settings(pg, '')
         st = pg.text_content('#settingsDialog')
         check('no Ticket tracker section while no item uses it', 'Ticket tracker' not in st)
         check('nothing asked of Drive about the tracker yet', not tracker_reqs, tracker_reqs)
 
         # ---- the editor
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .btn-primary'); pg.wait_for_selector(f'{D}[open]')
         pg.fill(f'{D} input[placeholder="e.g. Netflix"]', 'Train fare/Parking')
         pg.fill(f'{D} input[placeholder="0.00"]', '462')
@@ -117,12 +115,12 @@ try:
         pg.click('#txDialog .sheet-head .icon-btn')
 
         # ---- settings status, Check now with a changed file
-        open_settings(pg)
+        open_settings(pg, 'tracker')
         st = norm(pg.text_content('#trackerSection'))
         check('settings: section with the item and the figures range', 'Train fare/Parking takes its amount' in st and 'Pay periods Sept 2026 – Dec 2026 figures from 6 Oct 09:00' in st, st)
         put_tracker(tracker_file(oct_days=19, generated='2026-10-06T11:00:00.000Z'))
         hide_toast(pg)
-        pg.click('#trackerSection button:has-text("Check now")'); toast_has(pg, 'Ticket tracker figures checked')
+        settings_click(pg, '#trackerSection button:has-text("Check now")'); toast_has(pg, 'Ticket tracker figures checked')
         close_settings(pg)
         pr = projected(pg)
         check('changed file: 28 Oct now £428.61', any('428.61' in e for e in pr) and not any('441.39' in e for e in pr), pr)
@@ -130,7 +128,7 @@ try:
         # ---- a bad file keeps the last good figures
         put_tracker(tracker_file(version=2))
         open_settings(pg); hide_toast(pg)
-        pg.click('#trackerSection button:has-text("Check now")'); toast_has(pg, 'format version 2')
+        settings_click(pg, '#trackerSection button:has-text("Check now")'); toast_has(pg, 'format version 2')
         st = norm(pg.text_content('#trackerSection'))
         check('settings: why, and still using the last figures', 'format version 2' in st and 'Still using the figures above' in st, st)
         pg.screenshot(path=f'{OUT}/t4-settings-bad-file.png')
@@ -147,13 +145,14 @@ try:
         pg.click('#txDialog button[type=submit]'); toast_has(pg, 'Confirmed')
         check('confirmed at £428.61', '428.61' in norm(pg.text_content('.feed')) and not any('428.61' in e for e in projected(pg)))
         open_settings(pg)
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .rec-row >> nth=0'); pg.wait_for_selector(f'{D}[open]')
         check('reopens with the option ticked', pg.is_checked(box))
         pg.uncheck(box)
         pg.click(f'{D} button[type=submit]'); pg.wait_for_selector(f'{D}[open]', state='detached'); toast_has(pg, 'Recurring item updated')
         pg.click('#recurringDialog .sheet-head .icon-btn')
-        check('Ticket tracker section gone when no item uses it', pg.locator('#trackerSection').count() == 0)
+        open_settings(pg, '')
+        check('Ticket tracker section gone when no item uses it', pg.locator('#settingsDialog .settings-item[data-page=tracker]').count() == 0)
         close_settings(pg)
         pr = projected(pg)
         check('option off: back to £462.00, no tracker labels', pr and all('462.00' in e and 'tracker' not in e for e in pr), pr)

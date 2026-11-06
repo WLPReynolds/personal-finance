@@ -45,19 +45,20 @@ def submit(pg, toast='Recurring item added'):
 
 def open_manager(pg):
     pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-    pg.click('#settingsDialog button:has-text("Manage recurring items")')
+    pg.click('#settingsDialog .settings-item[data-page=recurring]')
     pg.wait_for_selector('#recurringDialog[open]')
 
 def close_manager(pg):
-    pg.click('#recurringDialog .icon-btn'); pg.click('#settingsDialog .icon-btn')
+    pg.click('#recurringDialog .icon-btn'); close_settings(pg)
 
 def descs(pg, sel='.feed .entry-desc'):
     return pg.eval_on_selector_all(sel, 'els => els.map(e => e.innerText.replace(/\\s+/g, " ").trim())')
 
 def top_day(pg):
-    """The day heading sitting just below the sticky tabs."""
+    """The day heading sitting just below the sticky tabs and (since v0.14) the sticky balance banner."""
     return pg.evaluate('''() => {
-        const tabs = document.querySelector('.tabs').getBoundingClientRect().bottom;
+        const bar = document.querySelector('.banner-bar');
+        const tabs = Math.max(document.querySelector('.tabs').getBoundingClientRect().bottom, bar ? bar.getBoundingClientRect().bottom : 0);
         const days = [...document.querySelectorAll('.feed .day')];
         const d = days.find(d => d.getBoundingClientRect().top >= tabs - 2);
         return d ? { date: d.dataset.date, gap: Math.round(d.getBoundingClientRect().top - tabs), scrollY: window.scrollY } : null; }''')
@@ -80,7 +81,7 @@ try:
         start_item(pg, 'Car loan', '250', 1, '2026-11-01', '2027-10-31')
         check('end date shows the last-payment / numbering fields', pg.is_visible(f'{D} input[placeholder="same"]'))
         pg.fill(f'{D} input[placeholder="same"]', '123.45')
-        pg.fill(f'{D} .field-pair >> nth=3 >> input >> nth=1', '2')
+        pg.fill(f'{D} label.field:has-text("First payment no.") input', '2')
         prev = norm(pg.text_content(f'{D} .rec-preview'))
         check('preview: 12 payments numbered 2–13, last £123.45 in Oct 2027', '12 payments numbered 2–13 of 13' in prev and 'last one £123.45 in Oct 2027' in prev, prev)
         pg.screenshot(path=f'{OUT}/v6-1-editor-loan.png')
@@ -113,15 +114,22 @@ try:
         # an ordinary redraw (show more, a skip) keeps the scroll where it is
         # (measure after Playwright has scrolled the target into view for the click)
         pg.locator('.horizon-list button').scroll_into_view_if_needed()
+        pg.wait_for_timeout(400)  # let the compact header settle after that scroll
         y = pg.evaluate('() => window.scrollY')
-        pg.click('.horizon-list button')
+        # tap it without Playwright scrolling again first (a real tap doesn't scroll)
+        pg.evaluate("document.querySelector('.horizon-list button').click()")
+        pg.wait_for_timeout(200)
         check('show more keeps the scroll position', abs(pg.evaluate('() => window.scrollY') - y) < 5, (y, pg.evaluate('() => window.scrollY')))
         pg.click('.horizon-list button'); pg.click('.horizon-list button')
-        pg.click('.feed .entry.projected:has-text("Car loan") >> nth=3'); pg.wait_for_selector('#txDialog[open]')
+        pg.locator('.feed .entry.projected:has-text("Car loan") >> nth=3').scroll_into_view_if_needed()
+        pg.wait_for_timeout(400)
         y0 = pg.evaluate('() => window.scrollY')
+        pg.evaluate('''() => [...document.querySelectorAll('.feed .entry.projected')].filter(e => e.textContent.includes('Car loan'))[3].click()''')
+        pg.wait_for_selector('#txDialog[open]')
         check('dialog: payment 5 of 13', 'Payment 5 of 13.' in pg.text_content('#txDialog'), pg.text_content('#txDialog .rec-status'))
         pg.click('#txDialog button:has-text("Skip this month")')
         pg.wait_for_selector('#txDialog[open]', state='detached'); saved(pg, 'Skipped')
+        pg.wait_for_timeout(200)
         y1 = pg.evaluate('() => window.scrollY')
         check('skip redraw keeps the scroll position', abs(y1 - y0) < 5, (y0, y1))
         loan = [d for d in descs(pg) if 'Car loan' in d]

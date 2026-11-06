@@ -31,7 +31,7 @@ try:
         pg.click('.setup-form button[type=submit]'); pg.wait_for_selector('.feed')
 
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .btn-primary'); pg.wait_for_selector(f'{D}[open]')
         pg.fill(f'{D} input[placeholder="e.g. Netflix"]', 'Subscription')
         pg.fill(f'{D} input[placeholder="0.00"]', '12.99')
@@ -74,7 +74,7 @@ try:
         pg.select_option(f'{D} .field-pair >> nth=1 >> select', value='d')
         pg.fill(days, '90')
         pg.click(f'{D} button[type=submit]'); pg.wait_for_selector(f'{D}[open]', state='detached'); saved(pg, 'Recurring item updated')
-        pg.click('#recurringDialog .icon-btn'); pg.click('#settingsDialog .icon-btn')
+        pg.click('#recurringDialog .icon-btn'); close_settings(pg)
 
         feed = pg.evaluate('() => [...document.querySelectorAll(".feed .entry.projected")].map(e => e.innerText.replace(/\\s+/g," "))')
         days_in_feed = pg.evaluate('() => [...document.querySelectorAll(".feed .day")].map(e => e.textContent)')

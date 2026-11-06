@@ -42,13 +42,12 @@ def add_spend(pg, amount, desc, date):
     pg.wait_for_selector('#txDialog[open]', state='detached')
 def tap_sync(pg):
     # an earlier "Synced" toast may still be showing — hide it so we wait for this sync's own
-    pg.evaluate('document.getElementById("toast").hidden = true')
+    pg.evaluate('() => { const e = document.getElementById("toast"); if (e) e.hidden = true; }')
     pg.click('#syncChip'); toast_has(pg, 'Synced with Google Drive')
 def feed_text(pg): return pg.text_content('.feed') or ''
 def data_descs():
     f = drive_files()[0]
     return sorted(t['description'] for t in json.loads(f['text'])['ledger']['transactions'])
-def close_settings(pg): pg.click('#settingsDialog .sheet-head .icon-btn')
 
 try:
     with sync_playwright() as p:
@@ -69,16 +68,15 @@ try:
         phone.screenshot(path=f'{OUT}/v09-1-phone-header.png', clip={'x': 0, 'y': 0, 'width': 412, 'height': 140})
 
         # ---- settings before Drive
-        phone.click('#settingsBtn'); phone.wait_for_selector('#settingsDialog[open]')
-        st = phone.text_content('#settingsDialog')
+        st = settings_text(phone, '', 'device', 'backups')  # v0.15.21: Settings is a menu of pages
         check('settings: Test data section gone', 'Test data' not in st)
         check('settings: This device section with erase', 'This device' in st and 'Erase all data on this device' in st)
         check('settings: backups need Drive sync', 'Automatic backups' in st and 'Need Google Drive sync' in st)
         check('settings footer name', f'Personal Finance v{APP_V}' in st)
-        phone.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(phone, '#settingsDialog button:has-text("Connect Google Drive")')
         phone.wait_for_function('() => /Synced/.test(document.getElementById("syncChip").textContent)', timeout=8000)
         phone.wait_for_timeout(200)
-        st = phone.text_content('#settingsDialog')
+        st = settings_text(phone, 'backups')
         check('settings: backups section once connected', 'Backups…' in st and 'Last backup: never' in st, st[st.find('Automatic'):st.find('Automatic') + 220])
         check('no backup when the file is first created', backup_names() == [], backup_names())
         bar_h = phone.evaluate('document.querySelector(".topbar").getBoundingClientRect().height')
@@ -107,7 +105,7 @@ try:
         desk.clock.set_system_time(datetime.datetime(2026, 10, 7, 9, 5, 0))
         desk.wait_for_selector('.setup-form')
         desk.click('#settingsBtn'); desk.wait_for_selector('#settingsDialog[open]')
-        desk.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(desk, '#settingsDialog button:has-text("Connect Google Drive")')
         desk.wait_for_selector('table.grid', timeout=8000)
         if desk.is_visible('#settingsDialog[open]'): close_settings(desk)
         check('desktop shows the mistake', 'Mistake' in desk.text_content('table.grid'))
@@ -116,11 +114,10 @@ try:
 
         # ---- phone: Backups list
         phone.clock.set_system_time(datetime.datetime(2026, 10, 7, 15, 12, 0))
-        phone.click('#settingsBtn'); phone.wait_for_selector('#settingsDialog[open]')
-        st = phone.text_content('#settingsDialog')
+        st = settings_text(phone, 'backups')
         check('settings shows last backup time', 'Last backup: 7 Oct' in st, st[st.find('Last backup'):st.find('Last backup') + 40])
         phone.screenshot(path=f'{OUT}/v09-3-settings.png', full_page=False)
-        phone.click('#settingsDialog button:has-text("Backups…")')
+        settings_click(phone, '#settingsDialog button:has-text("Backups…")')
         phone.wait_for_selector('#backupsDialog[open] .backup-list')
         names = phone.eval_on_selector_all('#backupsDialog .backup-list .rec-name', 'els => els.map(e => e.textContent)')
         check('list newest first, first of the month tagged monthly', names == ['Wed, 7 Oct 2026', 'Tue, 6 Oct 2026monthly'] or names == ['Wed 7 Oct 2026', 'Tue 6 Oct 2026monthly'], names)
@@ -149,7 +146,7 @@ try:
         check('desktop: mistake gone after its sync', 'Mistake' not in ' '.join(desk_rows), desk_rows)
 
         # ---- the before-restore copy is listed and could undo it
-        phone.click('#settingsDialog button:has-text("Backups…")')
+        settings_click(phone, '#settingsDialog button:has-text("Backups…")')
         phone.wait_for_selector('#backupsDialog[open] .backup-list')
         top = phone.text_content('#backupsDialog .backup-list .rec-row >> nth=0')
         check('before-restore copy listed first, with time', '15:12' in top and 'before a restore' in top, top)
@@ -158,7 +155,7 @@ try:
 
         # ---- recurring: Expired section
         phone.click('#settingsBtn'); phone.wait_for_selector('#settingsDialog[open]')
-        phone.click('#settingsDialog button:has-text("Manage recurring items")'); phone.wait_for_selector('#recurringDialog[open]')
+        phone.click('#settingsDialog .settings-item[data-page=recurring]'); phone.wait_for_selector('#recurringDialog[open]')
         def add_item(desc, amount, day, start, end=None):
             phone.click('#recurringDialog .rec-add-top'); phone.wait_for_selector('#recurringEditDialog[open]')
             d = '#recurringEditDialog'
@@ -181,7 +178,7 @@ try:
         phone.click('#txDialog button:has-text("Confirm")'); phone.wait_for_selector('#txDialog[open]', state='detached')
         toast_has(phone, 'Confirmed')
         phone.click('#settingsBtn'); phone.wait_for_selector('#settingsDialog[open]')
-        phone.click('#settingsDialog button:has-text("Manage recurring items")'); phone.wait_for_selector('#recurringDialog[open]')
+        phone.click('#settingsDialog .settings-item[data-page=recurring]'); phone.wait_for_selector('#recurringDialog[open]')
         active = phone.eval_on_selector_all('#recurringDialog .rec-active .rec-name', 'els => els.map(e => e.textContent)')
         expired = phone.eval_on_selector_all('#recurringDialog .rec-expired .rec-name', 'els => els.map(e => e.textContent)')
         check('after the last payment: Old loan under Expired, at the bottom', expired == ['Old loan'] and 'Old loan' not in active, f'{active} / {expired}')
@@ -198,7 +195,7 @@ try:
         # ---- dark mode look of the backups list
         phone.emulate_media(color_scheme='dark')
         phone.click('#recurringDialog .sheet-head .icon-btn')
-        phone.click('#settingsDialog button:has-text("Backups…")')
+        settings_click(phone, '#settingsDialog button:has-text("Backups…")')
         phone.wait_for_selector('#backupsDialog[open] .backup-list')
         phone.screenshot(path=f'{OUT}/v09-8-backups-dark.png')
         b.close()

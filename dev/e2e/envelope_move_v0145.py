@@ -43,7 +43,7 @@ try:
 
         # ---- an account with two envelopes: Bills £600, Savings £400
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector(f'{A}[open]')
+        settings_click(pg, '#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector(f'{A}[open]')
         pg.fill(f'{A} input[placeholder="e.g. Monzo"]', 'Chase')
         pg.select_option(f'{A} select >> nth=0', 'savings')
         pg.fill(f'{A} .field-pair .amount-input', '1000')
@@ -54,11 +54,11 @@ try:
             pg.fill(f'{A} .env-set-row >> nth={i} >> .env-set-name', n)
             pg.fill(f'{A} .env-set-row >> nth={i} >> .env-set-open', v)
         save(pg, A, 'Account added')
-        pg.click('#settingsDialog .sheet-head .icon-btn')
+        close_settings(pg)
 
         # ---- editor: Move between envelopes
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector(f'{M}[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector(f'{M}[open]')
         pg.click(f'{M} .btn-primary >> nth=0'); pg.wait_for_selector(f'{R}[open]')
         check('editor has a "Move between envelopes" choice', pg.is_visible(f'{R} .seg-btn[data-value="move"]'))
         check('envelope pickers are hidden until Move is chosen', pg.is_hidden(f'{R} .env-move-from'))
@@ -133,7 +133,7 @@ try:
 
         # ---- editing the series keeps working, and other kinds are not affected
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector(f'{M}[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector(f'{M}[open]')
         pg.click(f'{M} .rec-row:has-text("Bills to Savings")'); pg.wait_for_selector(f'{R}[open]')
         check('editing an existing move: kind, account and envelopes are remembered',
               pg.get_attribute(f'{R} .seg-btn[data-value="move"]', 'aria-checked') == 'true'

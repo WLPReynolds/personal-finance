@@ -47,6 +47,26 @@ export const isDateKeyed = (item) => Boolean(item?.everyDays && item.everyDays <
 export const MAX_EVERY_DAYS = 366;
 
 /**
+ * v0.15.21. weekday: 0 = Sunday … 6 = Saturday (as Date#getUTCDay). Either the first such weekday on or
+ * after day `onOrAfter` (1–28; 1 = plain "first Friday"), or, with `last: true`, the last one in the month.
+ * @typedef {{ weekday: number, onOrAfter: number } | { weekday: number, last: true }} WeekdayRule
+ */
+export const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+/** v0.15.21: the latest "on or after" day — a 28-day February still holds the whole week after it. */
+export const MAX_ON_OR_AFTER = 28;
+
+/** v0.15.21: the day of the month a weekday rule gives in year y, month m (1–12). */
+export function weekdayRuleDay(rule, y, m) {
+  const dim = daysInMonth(y, m);
+  if (rule.last) {
+    const lastWd = new Date(Date.UTC(y, m - 1, dim)).getUTCDay();
+    return dim - ((lastWd - rule.weekday + 7) % 7);
+  }
+  const fromWd = new Date(Date.UTC(y, m - 1, rule.onOrAfter)).getUTCDay();
+  return rule.onOrAfter + ((rule.weekday - fromWd + 7) % 7);
+}
+
+/**
  * @typedef {Object} RecurringItem
  * @property {string} id
  * @property {'recurring'} recordType
@@ -60,7 +80,12 @@ export const MAX_EVERY_DAYS = 366;
  * @property {number|null} [everyDays]  - v0.7.1: every N days (MIN_EVERY_DAYS–MAX_EVERY_DAYS) counted from the start date,
  *                                         which is the first payment. When set, everyMonths/day are ignored here — they hold
  *                                         an approximation (N/30 months, start date's day) so an older device shows something close.
- * @property {number} day                - 1-31; a shorter month uses its last day
+ * @property {number} day                - 1-31; a shorter month uses its last day. With a weekdayRule it only holds an
+ *                                         approximation (onOrAfter + 3, or 28 for "last") for devices older than v0.15.21.
+ * @property {WeekdayRule|null} [weekdayRule] - v0.15.21: the day inside a due month is a weekday, not a fixed date, e.g.
+ *                                         People's Postcode Lottery: "the Friday that falls on or between 4th and 10th".
+ *                                         Lands once a month, so occurrences stay keyed by month. Not with everyDays or
+ *                                         payStatement. Absent/null = the fixed `day`.
  * @property {string} startDate          - ISO; nothing before this
  * @property {string|null} endDate       - ISO; last entry on or before this. null = indefinitely
  * @property {'none'|'before'|'after'} shift - weekend/bank holiday: don't move / working day before / next working day
@@ -225,7 +250,8 @@ export function nominalDate(item, period) {
   const offset = monthsBetween(periodOf(item.startDate), period);
   if (offset < 0 || offset % item.everyMonths !== 0) return null;
   const { y, m } = periodParts(period);
-  const iso = `${period}-${pad(Math.min(item.day, daysInMonth(y, m)))}`;
+  const dom = item.weekdayRule ? weekdayRuleDay(item.weekdayRule, y, m) : Math.min(item.day, daysInMonth(y, m));
+  const iso = `${period}-${pad(dom)}`;
   if (iso < item.startDate) return null;
   if (item.endDate && iso > item.endDate) return null;
   return iso;
@@ -553,6 +579,13 @@ function validateItem(f, ledger) {
   }
   if (!Number.isInteger(f.everyMonths) || f.everyMonths < 1 || f.everyMonths > 12) throw new Error('Repeat every 1 to 12 months');
   if (!Number.isInteger(f.day) || f.day < 1 || f.day > 31) throw new Error('Day of the month must be 1 to 31');
+  if (f.weekdayRule) { // v0.15.21
+    const r = f.weekdayRule;
+    if (!Number.isInteger(r.weekday) || r.weekday < 0 || r.weekday > 6) throw new Error('Choose a weekday');
+    if (!r.last && (!Number.isInteger(r.onOrAfter) || r.onOrAfter < 1 || r.onOrAfter > MAX_ON_OR_AFTER)) {
+      throw new Error(`“On or after” day must be 1 to ${MAX_ON_OR_AFTER}`);
+    }
+  }
   if (!isIso(f.startDate)) throw new Error('A start date is required');
   if (f.endDate !== null && !isIso(f.endDate)) throw new Error('The end date isn’t a valid date');
   if (f.endDate && f.endDate < f.startDate) throw new Error('The end date is before the start date');
@@ -581,6 +614,11 @@ function cleanItemFields(f) {
   const everyDays = payStatement || f.everyDays == null || f.everyDays === '' ? null : f.everyDays;
   // every N days: keep an approximate months/day rule alongside, for devices older than v0.7.1
   const byDays = everyDays !== null && Number.isInteger(everyDays) && isIso(f.startDate);
+  // v0.15.21: a weekday rule, kept only for a month-keyed, non-statement item; plus an approximate day for older devices
+  const wr = !payStatement && everyDays === null && f.weekdayRule ? f.weekdayRule : null;
+  const weekdayRule = !wr ? null : wr.last ? { weekday: wr.weekday, last: true } : { weekday: wr.weekday, onOrAfter: wr.onOrAfter };
+  const approxDay = !weekdayRule ? null : weekdayRule.last ? 28
+    : Number.isInteger(weekdayRule.onOrAfter) ? Math.min(31, weekdayRule.onOrAfter + 3) : f.day;
   return {
     description: (f.description ?? '').trim(),
     kind: f.kind,
@@ -589,7 +627,8 @@ function cleanItemFields(f) {
     amount: f.amount,
     everyMonths: byDays ? Math.min(12, Math.max(1, Math.round(everyDays / 30.4375))) : f.everyMonths,
     everyDays,
-    day: byDays ? Number(f.startDate.slice(8, 10)) : f.day,
+    day: byDays ? Number(f.startDate.slice(8, 10)) : approxDay ?? f.day,
+    weekdayRule,
     startDate: f.startDate,
     endDate: f.endDate || null,
     shift: f.shift ?? 'none',
@@ -732,6 +771,15 @@ export function describeRule(item, card = null) {
       return `${item.everyDays === 7 ? 'Weekly' : 'Fortnightly'} on ${weekday}s, from ${from}${shift}`;
     }
     return `Every ${item.everyDays} days from ${from}${shift}`;
+  }
+  if (item.weekdayRule) { // v0.15.21: "Monthly · first Friday on or after the 4th"
+    const r = item.weekdayRule;
+    const which = r.last ? `last ${WEEKDAY_NAMES[r.weekday]} of the month`
+      : r.onOrAfter === 1 ? `first ${WEEKDAY_NAMES[r.weekday]} of the month`
+        : `first ${WEEKDAY_NAMES[r.weekday]} on or after the ${nth(r.onOrAfter)}`;
+    const how = item.everyMonths === 1 ? 'Monthly' : item.everyMonths === 12 ? `Yearly in ${month}` : `Every ${item.everyMonths} months`;
+    const shift = item.shift === 'before' ? ' · working day before' : item.shift === 'after' ? ' · next working day' : '';
+    return `${how} · ${which}${shift}`;
   }
   const freq =
     item.everyMonths === 1 ? `Monthly on the ${nth(item.day)}`

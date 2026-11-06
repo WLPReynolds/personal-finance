@@ -27,7 +27,7 @@ def old_page(route):
 
 def add_card(pg, name):
     pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-    pg.click('#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector(f'{A}[open]')
+    settings_click(pg, '#settingsDialog button:has-text("+ Add account")'); pg.wait_for_selector(f'{A}[open]')
     pg.fill(f'{A} input[type=text] >> nth=0', name)
     sels = pg.query_selector_all(f'{A} select'); sels[0].select_option('credit'); sels[1].select_option(label='Monzo Flex')
     pg.fill(f'{A} input.amount-input >> nth=0', '10')

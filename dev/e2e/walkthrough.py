@@ -74,7 +74,7 @@ try:
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
         pg.screenshot(path=f'{OUT}/5-phone-settings.png')
         with pg.expect_download() as dl:
-            pg.click('#settingsDialog button:has-text("Download export")')
+            settings_click(pg, '#settingsDialog button:has-text("Download export")')
         export_path = f'{OUT}/export.json'
         dl.value.save_as(export_path)
         print('phone barclaycard owed:', bal_text, '| prefill amount:', prefill)

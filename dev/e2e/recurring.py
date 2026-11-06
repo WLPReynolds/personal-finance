@@ -83,7 +83,7 @@ try:
 
         # ---- manager
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]')
         pg.wait_for_selector('#recurringDialog[open]')
         check('manager says gov.uk list in use', 'gov.uk list' in pg.text_content('#recurringDialog'))
         pg.screenshot(path=f'{OUT}/r1-manager-empty.png')
@@ -113,7 +113,7 @@ try:
         manager_text = norm(pg.text_content('#recurringDialog'))
         check('TV subscription every 6 months, next 25 Feb 2027', 'Every 6 months on the 25th' in manager_text and 'Thu 25 Feb 2027' in manager_text, manager_text)
         pg.screenshot(path=f'{OUT}/r3-manager.png')
-        pg.click('#recurringDialog .icon-btn'); pg.click('#settingsDialog .icon-btn')
+        pg.click('#recurringDialog .icon-btn'); close_settings(pg)
 
         # ---- phone feed
         rows = feed_rows(pg)

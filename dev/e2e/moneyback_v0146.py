@@ -43,9 +43,6 @@ def tab(pg, name):
 def entries(pg):
     return pg.evaluate('() => [...document.querySelectorAll(".feed .entry")].map(e => ({ cls: e.className, text: e.innerText.replace(/\\s+/g," ").replace(/,/g,"") }))')
 def banner(pg): return norm(pg.text_content('.banner .banner-amount'))
-def open_settings(pg):
-    pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-def close_settings(pg): pg.click('#settingsDialog .sheet-head .icon-btn')
 def bg(pg, sel):
     return pg.evaluate('s => getComputedStyle(document.querySelector(s)).backgroundColor', sel)
 def is_reddish(c):
@@ -77,10 +74,11 @@ try:
 
         put_tracker(tracker_file(TICKETS))
         open_settings(pg)
-        pg.click('#settingsDialog button:has-text("Connect Google Drive")')
+        settings_click(pg, '#settingsDialog button:has-text("Connect Google Drive")')
         pg.wait_for_function('() => /Synced/.test(document.getElementById("syncChip").textContent)', timeout=8000)
 
         # ---- settings
+        open_settings(pg, 'tracker')  # v0.15.21: Ticket purchases sit on the Ticket tracker page
         sec = '#ticketSection'
         pg.check(f'{sec} label.check input')
         opts = pg.evaluate(f'() => [...document.querySelectorAll("{sec} select")[4].options].map(o => o.text + "|" + o.selected)')
@@ -90,7 +88,7 @@ try:
         hide_toast(pg); pg.click('#ticketSave')
         pg.wait_for_function('() => /Ticket purchases come from it too/.test(document.getElementById("settingsDialog").textContent)', timeout=8000)
         close_settings(pg)
-        open_settings(pg)
+        open_settings(pg, 'tracker')
         check('brought-forward amount kept after save', pg.input_value(f'{sec} input[inputmode=decimal]') == '153.60')
         close_settings(pg)
 

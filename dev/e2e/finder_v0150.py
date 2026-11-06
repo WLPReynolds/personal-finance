@@ -41,9 +41,6 @@ def setup(pg):
     pg.fill('.setup-form input[type=date]', '2026-10-01')
     pg.click('.setup-form button[type=submit]')
     pg.wait_for_selector('.feed, .grid, .summary')
-def open_settings(pg):
-    if pg.locator('#settingsDialog[open]').count() == 0: pg.click('#settingsBtn')
-    pg.wait_for_selector('#settingsDialog[open]')
 def add_spend(pg, col, amount, desc, date):
     pg.click(f'.acc-add >> nth={col}')
     pg.wait_for_selector('#txDialog[open]')
@@ -83,7 +80,7 @@ try:
 
         # ---- import, linking on the check page
         open_settings(desk)
-        desk.click('#settingsDialog button:has-text("Import from Excel…")')
+        settings_click(desk, '#settingsDialog button:has-text("Import from Excel…")')
         desk.set_input_files('#archiveImportDialog input[type=file]', XLSX)
         desk.wait_for_selector('#archiveImportDialog .arch-sheet')
         desk.click('#archiveImportDialog button:has-text("Next: check")')
@@ -104,7 +101,7 @@ try:
         check('links saved as one record in your ledger (so they sync)', len(rec) == 1 and set(rec[0]['links']) == {'chase', 'nationwide', 'barclaycard', 'barclaycardbt'} and rec[0]['links']['chase'] is None, rec)
 
         # ---- Find on desktop
-        if desk.locator('#settingsDialog[open]').count(): desk.click('#settingsDialog .sheet-head .icon-btn')
+        if desk.locator('#settingsDialog[open]').count(): close_settings(desk)
         desk.click('.grid-tools .find-btn')
         desk.wait_for_selector('#finderDialog[open]')
         check('Find opens as a window with the ✕', desk.locator('#finderDialog .win-close').count() == 1)
@@ -168,14 +165,14 @@ try:
 
         # ---- ⚙ Link to your accounts…
         open_settings(desk)
-        desk.click('#settingsDialog button:has-text("Link to your accounts…")')
+        settings_click(desk, '#settingsDialog button:has-text("Link to your accounts…")')
         desk.wait_for_selector('#archiveImportDialog[open] .arch-links')
         vals = desk.eval_on_selector_all('#archiveImportDialog .arch-link-sel', 'els => els.map(e => e.options[e.selectedIndex].text)')
         check('⚙ links show what was saved (no suggestion over a "not linked" choice)', vals == ['Not linked — its own column', 'Same as: Nationwide', 'Same as: Barclaycard', 'Same as: Barclaycard'], vals)
         desk.locator('#archiveImportDialog .arch-link-sel').nth(0).select_option(label='Same as: Current Account')
         desk.click('#archiveImportDialog button:has-text("Save links")')
         toast_has(desk, 'Links saved')
-        desk.click('#settingsDialog .sheet-head .icon-btn')
+        close_settings(desk)
         desk.click('.grid-tools .find-btn')
         desk.wait_for_selector('#finderDialog[open]')
         heads = desk.eval_on_selector_all('#finderDialog thead .fd-col-name', 'els => els.map(e => e.textContent)')
@@ -190,14 +187,14 @@ try:
         check('phone Summary has Find', phone.locator('.summary-tools .find-btn').count() == 1)
         # give the phone the same history (import on the phone too)
         open_settings(phone)
-        phone.click('#settingsDialog button:has-text("Import from Excel…")')
+        settings_click(phone, '#settingsDialog button:has-text("Import from Excel…")')
         phone.set_input_files('#archiveImportDialog input[type=file]', XLSX)
         phone.wait_for_selector('#archiveImportDialog .arch-sheet')
         phone.click('#archiveImportDialog button:has-text("Next: check")')
         phone.click('#archiveImportDialog button:has-text("Import 1 year")')
         phone.wait_for_selector('#archiveDialog[open]')
         phone.click('#archiveDialog .win-close')
-        phone.click('#settingsDialog .sheet-head .icon-btn')
+        close_settings(phone)
         phone.click('.summary-tools .find-btn')
         phone.wait_for_selector('#finderDialog[open]')
         find(phone, 'parking')

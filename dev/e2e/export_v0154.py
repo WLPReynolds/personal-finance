@@ -37,9 +37,6 @@ def setup(pg):
     pg.fill('.setup-form input[type=date]', '2026-10-01')
     pg.click('.setup-form button[type=submit]')
     pg.wait_for_selector('.feed, .grid, .summary')
-def open_settings(pg):
-    if pg.locator('#settingsDialog[open]').count() == 0: pg.click('#settingsBtn')
-    pg.wait_for_selector('#settingsDialog[open]')
 def add_spend(pg, col, amount, desc, date):
     pg.click(f'.acc-add >> nth={col}')
     pg.wait_for_selector('#txDialog[open]')
@@ -73,7 +70,7 @@ try:
         add_spend(desk, 1, '8', 'Fuel', '2026-10-03')
 
         open_settings(desk)
-        desk.click('#settingsDialog button:has-text("Import from Excel…")')
+        settings_click(desk, '#settingsDialog button:has-text("Import from Excel…")')
         desk.set_input_files('#archiveImportDialog input[type=file]', XLSX)
         desk.wait_for_selector('#archiveImportDialog .arch-sheet')
         desk.click('#archiveImportDialog button:has-text("Next: check")')
@@ -82,8 +79,9 @@ try:
         desk.wait_for_selector('#archiveDialog[open]')
         desk.click('#archiveDialog .win-close')
 
+        open_settings(desk, 'history')
         check('⚙ has an Export to Excel section', desk.locator('#settingsDialog h3:text-is("Export to Excel")').count() == 1)
-        desk.click('#settingsDialog button:has-text("Export to Excel…")')
+        settings_click(desk, '#settingsDialog button:has-text("Export to Excel…")')
         desk.wait_for_selector('#exportDialog[open]')
         check('opens as a window with the ✕', desk.locator('#exportDialog .win-close').count() == 1)
         check('From defaults to the earliest history', desk.input_value('#exportDialog input[aria-label=From]') == '2019-01-01')
@@ -143,7 +141,7 @@ try:
         phone = device(b, 412, 915, True)
         setup(phone)
         open_settings(phone)
-        phone.click('#settingsDialog button:has-text("Export to Excel…")')
+        settings_click(phone, '#settingsDialog button:has-text("Export to Excel…")')
         phone.wait_for_selector('#exportDialog[open]')
         phone.screenshot(path=f'{OUT}/v0154-2-export-phone.png')
         w = phone.evaluate('() => document.documentElement.scrollWidth')
