@@ -54,7 +54,7 @@ try:
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
         acc_names = pg.eval_on_selector_all('#settingsDialog .acc-list-name', 'els => els.map(e => e.childNodes[0].textContent.trim())')
         print('accounts:', acc_names)
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector(f'{M}[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector(f'{M}[open]')
         first, last = acc_names[0], acc_names[-1]
 
         # ---- editor wording (before any item exists: new item, default = money out)
@@ -106,7 +106,7 @@ try:
         pg.click(f'{M} .icon-btn'); pg.click('#settingsDialog .icon-btn')
         pg.reload(); pg.wait_for_selector('.feed')
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector(f'{M}[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector(f'{M}[open]')
         check('the choice is remembered after a reload', len(heads(pg)) == 0 and names(pg)[0] == 'Gym', names(pg))
         pg.click(f'{M} .rec-group-seg .seg-btn >> nth=0')
         check('back to by account', len(heads(pg)) == 2 and names(pg)[0] == 'Salary')

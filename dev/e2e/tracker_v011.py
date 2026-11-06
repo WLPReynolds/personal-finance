@@ -74,7 +74,7 @@ try:
         check('nothing asked of Drive about the tracker yet', not tracker_reqs, tracker_reqs)
 
         # ---- the editor
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .btn-primary'); pg.wait_for_selector(f'{D}[open]')
         pg.fill(f'{D} input[placeholder="e.g. Netflix"]', 'Train fare/Parking')
         pg.fill(f'{D} input[placeholder="0.00"]', '462')
@@ -147,7 +147,7 @@ try:
         pg.click('#txDialog button[type=submit]'); toast_has(pg, 'Confirmed')
         check('confirmed at £428.61', '428.61' in norm(pg.text_content('.feed')) and not any('428.61' in e for e in projected(pg)))
         open_settings(pg)
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .rec-row >> nth=0'); pg.wait_for_selector(f'{D}[open]')
         check('reopens with the option ticked', pg.is_checked(box))
         pg.uncheck(box)

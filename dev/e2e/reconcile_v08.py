@@ -52,7 +52,7 @@ try:
 
         # ---- recurring manager: Add at the top, no duplicate at the bottom while empty
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         check('recurring: + Add in the header', pg.is_visible('#recurringDialog .sheet-head .rec-add-top'))
         check('recurring: only one Add button while empty', pg.locator('#recurringDialog .btn-primary').count() == 1)
         pg.click('#recurringDialog .rec-add-top'); pg.wait_for_selector('#recurringEditDialog[open]')

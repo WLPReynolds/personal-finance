@@ -33,7 +33,7 @@ try:
         pg.click('.setup-form button[type=submit]'); pg.wait_for_selector('.feed')
 
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .btn-primary'); pg.wait_for_selector(f'{D}[open]')
         opts = pg.eval_on_selector(FREQ, 'e => [...e.options].map(o => o.textContent)')
         check('choices: Weekly, Fortnightly first, then the rest', opts == ['Weekly', 'Fortnightly', 'Monthly', 'Every few months', 'Yearly', 'Every so many days'], opts)
@@ -94,7 +94,7 @@ try:
 
         # with a confirmed entry, switching to Monthly is refused with an explanation
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .rec-row:has-text("Bin cleaning")'); pg.wait_for_selector(f'{D}[open]')
         pg.select_option(FREQ, value='1')
         pg.fill(f'{D} input[placeholder="1–31"]', '23')

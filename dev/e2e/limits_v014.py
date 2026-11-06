@@ -72,7 +72,7 @@ try:
 
         # ---- recurring bill on the 20th
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog button:has-text("+ Add")'); pg.wait_for_selector('#recurringEditDialog[open]')
         ed = '#recurringEditDialog'
         pg.fill(f'{ed} input[placeholder="e.g. Netflix"]', 'Council tax')
@@ -142,7 +142,7 @@ try:
         save_account(pg)
         pg.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog button:has-text("+ Add")'); pg.wait_for_selector('#recurringEditDialog[open]')
         pg.fill(f'{ed} input[placeholder="e.g. Netflix"]', 'Barclaycard payment')
         pg.click(f'{ed} .seg-btn:has-text("Transfer")')

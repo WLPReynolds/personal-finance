@@ -83,7 +83,7 @@ try:
 
         # ---- manager
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]')
         pg.wait_for_selector('#recurringDialog[open]')
         check('manager says gov.uk list in use', 'gov.uk list' in pg.text_content('#recurringDialog'))
         pg.screenshot(path=f'{OUT}/r1-manager-empty.png')

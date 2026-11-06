@@ -167,7 +167,7 @@ try:
 
         # ---- recurring transfer into Transport
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .btn-primary'); pg.wait_for_selector(f'{R}[open]')
         pg.fill(f'{R} input[placeholder="e.g. Netflix"]', 'Train fare/Parking')
         pg.click(f'{R} .seg-btn[data-value=transfer]')
@@ -190,7 +190,7 @@ try:
         pg.click(f'{E} .sheet-head .icon-btn')
         # tracker-style: single envelope only when the amount comes from the tracker
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .rec-row:has-text("Train fare"), #recurringDialog button:has-text("Train fare")'); pg.wait_for_selector(f'{R}[open]')
         check('editor reopens with Transport', pg.eval_on_selector(f'{R} .env-select', 'e => e.options[e.selectedIndex].text') == 'Transport')
         pg.check(f'{R} input[type=checkbox] >> nth=1')

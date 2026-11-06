@@ -45,7 +45,7 @@ def submit(pg, toast='Recurring item added'):
 
 def open_manager(pg):
     pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-    pg.click('#settingsDialog button:has-text("Manage recurring items")')
+    pg.click('#settingsDialog .settings-item[data-page=recurring]')
     pg.wait_for_selector('#recurringDialog[open]')
 
 def close_manager(pg):
@@ -80,7 +80,7 @@ try:
         start_item(pg, 'Car loan', '250', 1, '2026-11-01', '2027-10-31')
         check('end date shows the last-payment / numbering fields', pg.is_visible(f'{D} input[placeholder="same"]'))
         pg.fill(f'{D} input[placeholder="same"]', '123.45')
-        pg.fill(f'{D} .field-pair >> nth=3 >> input >> nth=1', '2')
+        pg.fill(f'{D} label.field:has-text("First payment no.") input', '2')
         prev = norm(pg.text_content(f'{D} .rec-preview'))
         check('preview: 12 payments numbered 2–13, last £123.45 in Oct 2027', '12 payments numbered 2–13 of 13' in prev and 'last one £123.45 in Oct 2027' in prev, prev)
         pg.screenshot(path=f'{OUT}/v6-1-editor-loan.png')

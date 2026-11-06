@@ -58,7 +58,7 @@ try:
 
         # ---- editor: Move between envelopes
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector(f'{M}[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector(f'{M}[open]')
         pg.click(f'{M} .btn-primary >> nth=0'); pg.wait_for_selector(f'{R}[open]')
         check('editor has a "Move between envelopes" choice', pg.is_visible(f'{R} .seg-btn[data-value="move"]'))
         check('envelope pickers are hidden until Move is chosen', pg.is_hidden(f'{R} .env-move-from'))
@@ -133,7 +133,7 @@ try:
 
         # ---- editing the series keeps working, and other kinds are not affected
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector(f'{M}[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector(f'{M}[open]')
         pg.click(f'{M} .rec-row:has-text("Bills to Savings")'); pg.wait_for_selector(f'{R}[open]')
         check('editing an existing move: kind, account and envelopes are remembered',
               pg.get_attribute(f'{R} .seg-btn[data-value="move"]', 'aria-checked') == 'true'

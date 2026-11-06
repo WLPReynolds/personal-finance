@@ -31,7 +31,7 @@ try:
         pg.click('.setup-form button[type=submit]'); pg.wait_for_selector('.feed')
 
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .btn-primary'); pg.wait_for_selector(f'{D}[open]')
         pg.fill(f'{D} input[placeholder="e.g. Netflix"]', 'Subscription')
         pg.fill(f'{D} input[placeholder="0.00"]', '12.99')

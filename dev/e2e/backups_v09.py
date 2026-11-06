@@ -158,7 +158,7 @@ try:
 
         # ---- recurring: Expired section
         phone.click('#settingsBtn'); phone.wait_for_selector('#settingsDialog[open]')
-        phone.click('#settingsDialog button:has-text("Manage recurring items")'); phone.wait_for_selector('#recurringDialog[open]')
+        phone.click('#settingsDialog .settings-item[data-page=recurring]'); phone.wait_for_selector('#recurringDialog[open]')
         def add_item(desc, amount, day, start, end=None):
             phone.click('#recurringDialog .rec-add-top'); phone.wait_for_selector('#recurringEditDialog[open]')
             d = '#recurringEditDialog'
@@ -181,7 +181,7 @@ try:
         phone.click('#txDialog button:has-text("Confirm")'); phone.wait_for_selector('#txDialog[open]', state='detached')
         toast_has(phone, 'Confirmed')
         phone.click('#settingsBtn'); phone.wait_for_selector('#settingsDialog[open]')
-        phone.click('#settingsDialog button:has-text("Manage recurring items")'); phone.wait_for_selector('#recurringDialog[open]')
+        phone.click('#settingsDialog .settings-item[data-page=recurring]'); phone.wait_for_selector('#recurringDialog[open]')
         active = phone.eval_on_selector_all('#recurringDialog .rec-active .rec-name', 'els => els.map(e => e.textContent)')
         expired = phone.eval_on_selector_all('#recurringDialog .rec-expired .rec-name', 'els => els.map(e => e.textContent)')
         check('after the last payment: Old loan under Expired, at the bottom', expired == ['Old loan'] and 'Old loan' not in active, f'{active} / {expired}')

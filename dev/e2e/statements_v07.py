@@ -88,7 +88,7 @@ try:
 
         # ---- statement payment as a recurring item
         pg.click('#settingsBtn'); pg.wait_for_selector('#settingsDialog[open]')
-        pg.click('#settingsDialog button:has-text("Manage recurring items")'); pg.wait_for_selector('#recurringDialog[open]')
+        pg.click('#settingsDialog .settings-item[data-page=recurring]'); pg.wait_for_selector('#recurringDialog[open]')
         pg.click('#recurringDialog .btn-primary'); pg.wait_for_selector(f'{D}[open]')
         pg.fill(f'{D} input[placeholder="e.g. Netflix"]', 'Barclaycard direct debit')
         pg.click(f'{D} .seg-btn[data-value="transfer"]')

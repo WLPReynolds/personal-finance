@@ -117,7 +117,7 @@ try:
         # ---- recurring: "From Alison" on the joint account; the To list stays in the file
         desk.evaluate('() => document.querySelectorAll("dialog[open]").forEach(d => d.close())')
         open_settings(desk)
-        desk.click('#settingsDialog button:has-text("Manage recurring items")')
+        desk.click('#settingsDialog .settings-item[data-page=recurring]')
         desk.wait_for_selector('#recurringDialog[open]')
         desk.click('#recurringDialog button:has-text("+ Add")')
         desk.wait_for_selector('#recurringEditDialog[open]')
