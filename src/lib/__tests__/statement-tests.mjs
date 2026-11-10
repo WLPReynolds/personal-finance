@@ -240,6 +240,61 @@ test('nothing owed -> no payment', () => {
   ledger = addRecurring(ledger, ddItem(current, card, { amount: 0, startDate: '2026-11-01' })).ledger;
   assert.deepEqual(projections(ledger, '2026-12-31', HOL), []);
 });
+const credit = (ledger, card, date, amount, extra = {}) =>
+  addTransaction(ledger, { accountId: card.id, date, amount, direction: 'credit', description: `Refund ${date}`, ...extra });
+test('v0.15.22: a refund after the statement, before the direct debit, comes off the payment', () => {
+  let { ledger, current, card } = setup({ owed: 0 });
+  ledger = spend(ledger, card, '2026-10-10', 30000);
+  ledger = credit(ledger, card, '2026-10-25', 2500); // after the 19 Oct statement
+  ledger = addRecurring(ledger, ddItem(current, card, { startDate: '2026-11-01' })).ledger;
+  const ps = projections(ledger, '2026-12-31', HOL);
+  assert.equal(ps[0].date, '2026-11-13');
+  assert.equal(ps[0].amount, 27500);
+  assert.equal(ps[0].statement.owed, 30000);
+  assert.equal(ps[0].statement.creditsSince, 2500);
+  // nothing else spent: the next statement is £0 (not -£25), so no December payment
+  assert.equal(ps.length, 1);
+  const view = withStatements(withProjections(ledger, '2026-12-31', HOL), '2026-12-31', HOL);
+  assert.deepEqual(view.transactions.filter((t) => t.isStatement).map((t) => t.statement.owed), [30000, 0, 0]);
+});
+test('v0.15.22: a refund on the direct debit day counts; one the day after waits for the next payment', () => {
+  let { ledger, current, card } = setup({ owed: 0 });
+  ledger = spend(ledger, card, '2026-10-10', 30000);
+  ledger = credit(ledger, card, '2026-11-13', 1000);
+  ledger = credit(ledger, card, '2026-11-14', 500);
+  ledger = spend(ledger, card, '2026-11-01', 4000); // spends after the statement don't count
+  ledger = addRecurring(ledger, ddItem(current, card, { startDate: '2026-11-01' })).ledger;
+  const ps = projections(ledger, '2026-12-31', HOL);
+  assert.deepEqual(ps.map((p) => [p.date, p.amount]), [['2026-11-13', 29000], ['2026-12-14', 3500]]);
+});
+test('v0.15.22: a manual payment after the statement comes off; moving the DD date moves the cut-off', () => {
+  let { ledger, current, card } = setup({ owed: 0 });
+  ledger = spend(ledger, card, '2026-10-10', 30000);
+  ledger = credit(ledger, card, '2026-11-05', 10000, { description: 'Manual payment' });
+  ledger = credit(ledger, card, '2026-11-20', 2000);
+  ledger = addRecurring(ledger, ddItem(current, card, { startDate: '2026-11-01' })).ledger;
+  const item = ledger.scheduledItems[0];
+  assert.equal(projections(ledger, '2026-11-30', HOL)[0].amount, 20000);
+  ledger = setOccurrence(ledger, item.id, '2026-11', { date: '2026-11-20' });
+  assert.equal(projections(ledger, '2026-11-30', HOL)[0].amount, 18000);
+});
+test('v0.15.22: refunds bigger than the statement mean no payment', () => {
+  let { ledger, current, card } = setup({ owed: 0 });
+  ledger = spend(ledger, card, '2026-10-10', 3000);
+  ledger = credit(ledger, card, '2026-10-30', 5000);
+  ledger = addRecurring(ledger, ddItem(current, card, { startDate: '2026-11-01' })).ledger;
+  assert.deepEqual(projections(ledger, '2026-12-31', HOL), []);
+});
+test('v0.15.22: a refund moved onto the statement itself isn’t taken off twice', () => {
+  let { ledger, current, card } = setup({ owed: 0 });
+  ledger = spend(ledger, card, '2026-10-10', 30000);
+  ledger = credit(ledger, card, '2026-10-20', 2500, { statementMonth: '2026-10' });
+  ledger = addRecurring(ledger, ddItem(current, card, { startDate: '2026-11-01' })).ledger;
+  const p = projections(ledger, '2026-11-30', HOL)[0];
+  assert.equal(p.statement.owed, 27500);
+  assert.equal(p.statement.creditsSince, 0);
+  assert.equal(p.amount, 27500);
+});
 test('projected statement payments appear in the view and its statement rows', () => {
   let { ledger, current, card } = setup({ owed: 80000 });
   ledger = addRecurring(ledger, ddItem(current, card)).ledger;
