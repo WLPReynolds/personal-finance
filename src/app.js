@@ -53,7 +53,7 @@ import {
   envelopeLegAccountId, WEEKDAY_NAMES, MAX_ON_OR_AFTER,
 } from './lib/schedule.js';
 import {
-  DEFAULT_PAYMENT_DAYS, statementConfig, statementDate, paymentDueDate, statementFor, statementMonthByDate,
+  DEFAULT_PAYMENT_DAYS, statementConfig, statementDate, paymentDueDate, statementFor, creditsSinceStatement, statementMonthByDate,
   boundaryChoice, withStatements, addMonths, monthOf, statementMonths,
 } from './lib/statements.js';
 import {
@@ -71,7 +71,7 @@ import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } f
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.21';
+export const APP_VERSION = '0.15.22';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -2079,7 +2079,7 @@ function openOccurrenceDialog(itemId, period) {
     ? h('p', { class: 'stmt-info' },
         st.beforeRecords
           ? `Pays the ${longDate(st.date)} statement, which is from before your records start — so this is your estimate. Put in the real figure from the statement and tap “Save for this month only”.`
-          : [`Pays the ${longDate(st.date)} statement: ${formatPence(st.owed)} owed${st.date > today ? ' so far (it isn’t produced yet)' : ''}. To pay a different amount this month, change it and tap “Save for this month only”. `,
+          : [`Pays the ${longDate(st.date)} statement: ${formatPence(st.owed)} owed${st.date > today ? ' so far (it isn’t produced yet)' : ''}${st.creditsSince > 0 ? `, less ${formatPence(st.creditsSince)} refunded or paid in since — ${formatPence(st.toPay)} to pay` : ''}. To pay a different amount this month, change it and tap “Save for this month only”. `,
               h('button', { type: 'button', class: 'btn-link', onclick: () => openStatementDialog(card.id, st.month) }, 'View statement…')])
     : null;
   const tp = p.tracker ?? null;
@@ -2304,10 +2304,18 @@ function openStatementDialog(cardId, month) {
       return h('p', { class: 'muted small' }, `Payment due ${longDate(st.dueDate)}. To have it filled in for you, set up a recurring transfer to ${card.name} and tick “Pay the statement balance” (⚙ → Manage recurring items).`);
     }
     const paid = state.ledger.transactions.find((t) => t.scheduledItemId === item.id && t.scheduledPeriod === period && t.accountId === card.id);
-    if (paid) return h('p', { class: 'stmt-pay' }, `✓ Paid ${formatPence(paid.amount)} on ${longDate(paid.date)}${paid.amount < st.owed ? ` — ${formatPence(st.owed - paid.amount)} carried to the next statement` : ''}.`);
+    if (paid) {
+      // v0.15.22: refunds/payments after the statement were taken off what the direct debit collected
+      const credits = creditsSinceStatement(view, card, month, paid.date, state.holidays, item.id).total;
+      const due = Math.max(0, st.owed - credits);
+      return h('p', { class: 'stmt-pay' }, `✓ Paid ${formatPence(paid.amount)} on ${longDate(paid.date)}${credits > 0 ? ` (${formatPence(st.owed)} less ${formatPence(credits)} refunded or paid in since)` : ''}${paid.amount < due ? ` — ${formatPence(due - paid.amount)} carried to the next statement` : ''}.`);
+    }
     const proj = view.transactions.find((t) => t.isProjected && t.scheduledItemId === item.id && t.scheduledPeriod === period && t.accountId === card.id)?.projection;
     if (proj) {
-      return h('div', { class: 'stmt-pay' },
+      const less = proj.statement?.creditsSince > 0
+        ? h('p', { class: 'muted small' }, `${formatPence(st.owed)} owed, less ${formatPence(proj.statement.creditsSince)} refunded or paid in since the statement.`)
+        : null;
+      return h('div', { class: 'stmt-pay' }, less,
         h('p', {}, `↻ ${proj.skipped ? 'Skipped' : `${formatPence(proj.amount)} on ${longDate(proj.date)}`} from ${accountById(item.accountId)?.name ?? 'account'}`,
           proj.changed ? h('span', { class: 'muted' }, ` (changed for this month — statement says ${formatPence(proj.seriesAmount)})`) : null),
         h('button', { type: 'button', class: 'btn-secondary btn-small', onclick: () => openOccurrenceDialog(item.id, period) }, 'Change or confirm the payment…'));

@@ -108,6 +108,29 @@ export function statementFor(ledger, account, month, holidays) {
   return { month, date, dueDate, owed, beforeRecords: false };
 }
 
+/**
+ * v0.15.22: money paid onto the card after a statement and up to `toIso` (the
+ * day its payment is taken) — refunds and any payments. The bank takes these
+ * off the statement amount when it collects the direct debit, even though
+ * they belong to the next statement. Counts credits on a later statement than
+ * `month`, dated on or before `toIso`; entries of `excludeItemId` (the
+ * statement payment itself, projected or confirmed) don't count.
+ * @returns {{ total: number, entries: object[] }}
+ */
+export function creditsSinceStatement(ledger, account, month, toIso, holidays, excludeItemId = null) {
+  const entries = [];
+  let total = 0;
+  for (const t of ledger.transactions) {
+    if (t.accountId !== account.id || t.direction !== 'credit' || t.kind === 'note' || t.skipped || t.isStatement) continue;
+    if (excludeItemId && t.scheduledItemId === excludeItemId) continue;
+    if (!t.date || t.date > toIso) continue;
+    if (effectiveStatementMonth(account, t, holidays) <= month) continue;
+    entries.push(t);
+    total += t.amount;
+  }
+  return { total, entries };
+}
+
 /** Every statement month for a card from its first one to the last dated on or before `toIso`. */
 export function statementMonths(account, toIso, holidays) {
   const first = firstStatementMonth(account, holidays);

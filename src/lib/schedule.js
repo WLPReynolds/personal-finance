@@ -32,7 +32,7 @@
 import { LoanTransferError, assertNoLoanTransferOut } from './limits.js';
 import { randomUUID } from './id.js';
 import { daysInMonth, shiftToWorkingDay } from './workdays.js';
-import { statementConfig, paymentDueDate, statementFor, addMonths as addStatementMonths } from './statements.js';
+import { statementConfig, paymentDueDate, statementFor, creditsSinceStatement, addMonths as addStatementMonths } from './statements.js';
 import { TRACKER_SOURCE, trackerPeriodFor } from './tracker-estimates.js';
 import { envelopeConfig, validateSplits, fitSplits } from './envelopes.js';
 import { ticketSettings, ticketProjections, ticketLegs, returnProjections, returnLegs } from './tickets.js';
@@ -441,8 +441,16 @@ export function projections(ledger, toIso, holidays, sources = {}) {
     pending.sort((a, b) => a.date.localeCompare(b.date));
     for (const { item, card, period, date } of pending) {
       if (confirmed.has(`${item.id}|${period}`)) continue;
-      const st = statementFor(balanceLedger(), card, addStatementMonths(period, -1), holidays);
-      const amount = st.beforeRecords ? item.amount : Math.max(0, st.owed);
+      const bl = balanceLedger();
+      let st = statementFor(bl, card, addStatementMonths(period, -1), holidays);
+      // v0.15.22: refunds and payments made after the statement, up to the day the
+      // payment is taken, come off what the direct debit collects
+      if (!st.beforeRecords) {
+        const payDate = exceptions.get(exceptionId(item.id, period))?.date ?? date;
+        const credits = creditsSinceStatement(bl, card, st.month, payDate, holidays, item.id).total;
+        st = { ...st, creditsSince: credits, toPay: Math.max(0, st.owed - credits) };
+      }
+      const amount = st.beforeRecords ? item.amount : st.toPay;
       const p = projectionFor(item, period, date, amount, null, { statement: st });
       if (!p) continue;
       if (p.amount <= 0 && !p.skipped) continue; // nothing owed: no payment
