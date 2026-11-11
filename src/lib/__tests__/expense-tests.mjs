@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { emptyLedger, addAccount, addTransaction, updateTransaction, updateAccount, deleteTransaction } from '../ops.js';
 import {
   claimsOn, isExpense, setExpense, setClaimStatus, nextStatus, previousStatus, claimSections, recentCandidates,
-  shareSummary, photoFileName, cleanupPlan, cleanupMessage, fitExpense, unpaidSummary, receiptFileName,
+  shareSummary, sharePayload, photoFileName, cleanupPlan, cleanupMessage, fitExpense, unpaidSummary, receiptFileName,
 } from '../expenses.js';
 import { createPhotoLibrary, memoryPhotoBackend, fitWithin, isPdf, pdfProblem, MAX_PDF_BYTES, PDF_TYPE } from '../photos.js';
 import { mergeLedger } from '../merge.js';
@@ -151,6 +151,14 @@ test('share text: date, amount (of the full one if part), details, and a total f
   const text = shareSummary([txOf(l, s.hotel), txOf(l, s.fuel)]);
   assert.equal(text, '12/10/2026 · £145.00 (of £189.00) · Premier Inn\nRoom only\n\n13/10/2026 · £23.50 · Fuel\n\nTotal: £168.50 (2 claims)');
   assert.equal(photoFileName(txOf(l, s.hotel), 2, 3), '2026-10-12-Premier-Inn-2.jpg');
+});
+
+test('share: with receipts, files and title only and the summary to copy; without, the text', () => {
+  const files = [{ name: 'a.pdf' }];
+  assert.deepEqual(sharePayload(files, 'Summary', 'Expense claim — Parking'),
+    { data: { files, title: 'Expense claim — Parking' }, copyText: 'Summary' });
+  assert.deepEqual(sharePayload([], 'Summary', 'Expense claim — Parking'),
+    { data: { text: 'Summary', title: 'Expense claim — Parking' }, copyText: null });
 });
 
 // ------------------------------------------------------------ merge, sync, older versions

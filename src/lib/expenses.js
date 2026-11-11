@@ -173,6 +173,18 @@ export function shareSummary(txs) {
   return blocks.join('\n\n');
 }
 
+/**
+ * What goes in the Share sheet (v0.15.23). With receipts: the files and a title only.
+ * Gmail (Android at least) keeps the text and drops the attachments when a share has
+ * both, so the summary goes on the clipboard instead, to paste into the email body.
+ * Without receipts: the summary as text, nothing to copy.
+ * @returns {{ data: ShareData, copyText: string|null }}
+ */
+export function sharePayload(files, text, title) {
+  if (files.length) return { data: { files, title }, copyText: text };
+  return { data: { text, title }, copyText: null };
+}
+
 /** A file name for a shared receipt: date, a short description, a number; .pdf for a PDF. */
 export function photoFileName(tx, n, of, ext = 'jpg') {
   const words = (tx.description || 'receipt').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'receipt';

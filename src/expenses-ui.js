@@ -14,7 +14,7 @@
 import { windowFrame } from './archive-ui.js';
 import {
   claimsOn, isExpense, canBeExpense, setExpense, setClaimStatus, nextStatus, previousStatus, claimSections,
-  recentCandidates, shareSummary, receiptFileName, cleanupMessage, sizeText, unpaidSummary, STATUS_LABELS, RECENT_DAYS,
+  recentCandidates, shareSummary, sharePayload, receiptFileName, cleanupMessage, sizeText, unpaidSummary, STATUS_LABELS, RECENT_DAYS,
 } from './lib/expenses.js';
 import { fitWithin, JPEG_QUALITY, isPdf, pdfProblem, PDF_TYPE } from './lib/photos.js';
 
@@ -237,6 +237,9 @@ export function createExpensesUI(ctx) {
     const fresh = txs.map((t) => ctx.ledger().transactions.find((x) => x.id === t.id) ?? t).filter(isExpense);
     const text = shareSummary(fresh);
     const title = fresh.length === 1 ? `Expense claim — ${fresh[0].description}` : `Expense claims (${fresh.length})`;
+    // Copy the summary now, while the tap still counts — reading the receipts below takes a moment.
+    // Only used if there turn out to be receipts (they're shared without the text; see sharePayload).
+    const copying = (async () => { try { await navigator.clipboard.writeText(text); return true; } catch { return false; } })();
     const files = [];
     try {
       for (const t of fresh) {
@@ -251,18 +254,22 @@ export function createExpensesUI(ctx) {
       toast(`Couldn’t read the receipts: ${err.message}`, 'error');
       return;
     }
+    const { data, copyText } = sharePayload(files, text, title);
+    const copied = await copying;
     const canFiles = (() => { try { return files.length > 0 && Boolean(navigator.canShare?.({ files })); } catch { return false; } })();
     try {
-      if (canFiles) { await navigator.share({ files, text, title }); return; }
-      if (!files.length && navigator.share) { await navigator.share({ text, title }); return; }
+      if (canFiles) {
+        await navigator.share(data);
+        if (copyText) toast(copied ? 'Details copied — paste them into the email' : 'Receipts shared — the details couldn’t be copied here', copied ? 'ok' : 'error');
+        return;
+      }
+      if (!files.length && navigator.share) { await navigator.share(data); return; }
     } catch (err) {
       if (err?.name === 'AbortError') return; // closed the share sheet
       // fall through to downloading
     }
-    // No Share sheet for files here (some desktop browsers): download the receipts and copy the text
+    // No Share sheet for files here (some desktop browsers): download the receipts; the text is already copied
     for (const f of files) ctx.downloadBlob(f, f.name);
-    let copied = false;
-    try { await navigator.clipboard.writeText(text); copied = true; } catch { /* not allowed */ }
     toast([files.length ? `Downloaded ${plural(files.length, 'receipt')}` : '', copied ? 'details copied — paste them into your email' : ''].filter(Boolean).join('; ') || 'Couldn’t share or copy here', copied || files.length ? 'ok' : 'error');
   }
 
