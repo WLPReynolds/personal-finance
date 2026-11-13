@@ -71,7 +71,7 @@ import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } f
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.23';
+export const APP_VERSION = '0.15.24';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -210,6 +210,41 @@ function toast(message, kind = 'ok') {
   toast.timer = setTimeout(() => (t.hidden = true), kind === 'ok' ? 2200 : 5000);
 }
 
+/**
+ * v0.15.24: the app's own message box, in place of the browser's alert() and
+ * confirm(). Resolves true (the main button) or false (Cancel, Escape, or a tap
+ * outside). Alerts (no cancelLabel) have one button and always resolve true.
+ * Shown one at a time, in the top layer like every other dialog, so it sits
+ * over whatever sheet is open.
+ * @param {string} message  blank lines split paragraphs
+ * @param {{title?: string, okLabel?: string, cancelLabel?: string|null, danger?: boolean}} [o]
+ * @returns {Promise<boolean>}
+ */
+let msgQueue = Promise.resolve();
+function messageBox(message, { title = '', okLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {}) {
+  const show = () => new Promise((resolve) => {
+    const dlg = $('msgDialog');
+    let settled = false;
+    // Resolved inside the click itself (not the later 'close' event) so anything
+    // that needs a fresh tap — Google sign-in — still has one.
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const ok = h('button', { type: 'button', class: danger ? 'btn-primary msg-danger' : 'btn-primary', onclick: () => { done(true); dlg.close(); } }, okLabel);
+    const cancel = cancelLabel ? h('button', { type: 'button', class: 'btn-secondary', onclick: () => { done(false); dlg.close(); } }, cancelLabel) : null;
+    dlg.addEventListener('close', () => done(!cancelLabel), { once: true }); // Escape / tap outside: false for a question, true for a plain notice
+    dlg.replaceChildren(h('div', { class: 'sheet-body msg-body', role: 'alertdialog', 'aria-labelledby': 'msgTitle', 'aria-describedby': 'msgText' },
+      title ? h('h2', { id: 'msgTitle', class: 'msg-title' }, title) : null,
+      h('div', { id: 'msgText', class: 'msg-text' }, message.split(/\n{2,}/).map((para) => h('p', {}, para))),
+      h('div', { class: 'msg-actions' }, cancel, ok)));
+    openDialog(dlg);
+    (danger && cancel ? cancel : ok).focus(); // a destructive question starts on the safe button
+  });
+  const p = msgQueue.then(show);
+  msgQueue = p.catch(() => {});
+  return p;
+}
+const confirmBox = (message, opts) => messageBox(message, { cancelLabel: 'Cancel', ...opts });
+const alertBox = (message, opts) => messageBox(message, { cancelLabel: null, ...opts });
+
 function accountById(id) {
   return state.ledger.accounts.find((a) => a.id === id);
 }
@@ -277,11 +312,25 @@ function limitText(p, n) {
   return `${n} goes OVER its ${formatPence(p.limit)} credit limit ${when === 'today' ? 'today' : `on ${when}`}: ${formatPence(p.balance)} owed.`;
 }
 /**
+ * v0.15.24: a message box doesn't freeze the app the way the browser's confirm()
+ * did, so a Drive sync can land while you're deciding. A save that was worked
+ * out before the box opened would then overwrite what just arrived — so it's
+ * dropped (with a note) and you save again from the fresh data.
+ */
+const ledgerSnapshot = () => [state.personal, state.joint];
+function ledgerMoved(base) {
+  const now = ledgerSnapshot();
+  if (now[0] === base[0] && now[1] === base[1]) return false;
+  toast('Your data was updated from Drive while you were deciding — nothing was saved. Check it and try again.', 'warn');
+  return true;
+}
+/**
  * Before saving `next`: if it takes an account past a line (from today up to
  * the furthest date the screen shows), ask first. A warning, never a block.
- * @returns {boolean} true = go ahead
+ * @returns {Promise<boolean>} true = go ahead
  */
-function limitsOK(next) {
+async function limitsOK(next) {
+  const base = ledgerSnapshot();
   try {
     const to = projectionEnd();
     const before = withProjections(state.ledger, to, state.holidays, sources());
@@ -295,7 +344,8 @@ function limitsOK(next) {
     const parts = [];
     if (own.length) parts.push(own.map((p) => `⚠ ${limitLine(p)}`).join('\n'));
     if (knock.length) parts.push(`${own.length ? 'Knock-on: ' : ''}${knock.length === 1 ? 'this also affects another account' : 'this also affects other accounts'}:\n${knock.map((p) => `⚠ ${limitLine(p, true)}`).join('\n')}`);
-    return confirm(`${parts.join('\n\n')}\n\n(Checked to ${longDate(to)} — as far ahead as the screen shows.)\n\nSave anyway?`);
+    const go = await confirmBox(`${parts.join('\n\n')}\n\n(Checked to ${longDate(to)} — as far ahead as the screen shows.)`, { title: 'Heads up', okLabel: 'Save anyway', cancelLabel: 'Go back' });
+    return go && !ledgerMoved(base);
   } catch (err) {
     console.error(err); // a problem working out the warning must never stop a save
     return true;
@@ -503,7 +553,7 @@ function firstLiveDate() {
 // ---- v0.14.8: history imported from Budget.xlsx (src/archive-ui.js). Read
 // only and kept apart from the ledger: never in personal.json, the merge or sync.
 const archiveUI = createArchiveUI({
-  h, $, toast, openDialog, isOpen, sync, drive: syncDrive,
+  h, $, toast, openDialog, isOpen, confirmBox, sync, drive: syncDrive,
   // rows from the day the app's own records start are left out of an import
   firstLiveDate: () => firstLiveDate(),
   renderSettings: () => renderSettings(),
@@ -551,7 +601,7 @@ const exportUI = createExportUI({
 
 // ---- v0.15.8: expense claims (src/expenses-ui.js); photos on this device only (lib/photos.js)
 const expensesUI = createExpensesUI({
-  h, $, toast, openDialog, isOpen,
+  h, $, toast, openDialog, confirmBox, alertBox, isOpen,
   photos: createPhotoLibrary(typeof indexedDB === 'undefined' ? memoryPhotoBackend() : photoBackend),
   ledger: () => state.ledger,
   accountById: (id) => accountById(id),
@@ -1851,8 +1901,9 @@ function openTxDialog(opts) {
 
   const form = h('form', {
     method: 'dialog', class: 'sheet-body',
-    onsubmit: (e) => {
+    onsubmit: async (e) => {
       e.preventDefault();
+      const base = ledgerSnapshot();
       const fields = {
         accountId: account.id,
         date: date.value,
@@ -1893,7 +1944,7 @@ function openTxDialog(opts) {
       const ownId = existing ? existing.id : next.transactions.find((t) => t.accountId === account.id && !state.ledger.transactions.some((o) => o.id === t.id))?.id;
       let expResult = null;
       if (exp && ownId) {
-        expResult = exp.apply(next, ownId);
+        expResult = await exp.apply(next, ownId);
         if (expResult.cancelled) return;
         if (expResult.error) return toast(expResult.error, 'error');
         next = expResult.ledger;
@@ -1901,9 +1952,10 @@ function openTxDialog(opts) {
       if (existing) {
         // a reconciled entry (or its other leg) whose amount/date/etc changes gets unticked — ask first
         const unticked = state.ledger.transactions.filter((t) => isReconciled(t) && next.transactions.some((n) => n.id === t.id && !isReconciled(n)));
-        if (unticked.length && !confirm(`This entry has been reconciled${unticked.length > 1 ? ' (on both accounts)' : ''}.\n\nChanging it will untick it so you can check it again. Save anyway?`)) return;
+        if (unticked.length && !(await confirmBox(`This entry has been reconciled${unticked.length > 1 ? ' (on both accounts)' : ''}.\n\nChanging it will untick it so you can check it again.`, { title: 'Reconciled entry', okLabel: 'Save anyway' }))) return;
       }
-      if (!limitsOK(next)) return; // v0.14: warn if it takes an account past a line
+      if (ledgerMoved(base)) return; // a sync landed while a message box was open
+      if (!(await limitsOK(next))) return; // v0.14: warn if it takes an account past a line
       if (!existing) state.activeAccountId = account.id;
       savedHere = true;
       dlg.close();
@@ -1933,12 +1985,12 @@ function openTxDialog(opts) {
   h('div', { class: 'sheet-actions' },
     existing ? h('button', {
       type: 'button', class: 'btn-danger',
-      onclick: () => {
+      onclick: async () => {
         const recNote = isReconciled(existing) || isReconciled(counterpart) ? '\n\nIt has been reconciled — the bank shows it.' : '';
         const fenced = isRingFenced(state.ledger, existing.id);
-        if (!confirm((counterpart ? 'Delete this entry and its linked entry in the other account?' : fenced ? 'Delete this entry and its ring-fence transfer?' : 'Delete this entry?') + recNote)) return;
+        if (!(await confirmBox((counterpart ? 'Delete this entry and its linked entry in the other account?' : fenced ? 'Delete this entry and its ring-fence transfer?' : 'Delete this entry?') + recNote, { title: 'Delete entry', okLabel: 'Delete', danger: true }))) return;
         const next = fenced ? removeRingFence(deleteTransaction(state.ledger, existing.id), existing.id) : deleteTransaction(state.ledger, existing.id);
-        if (!limitsOK(next)) return;
+        if (!(await limitsOK(next))) return;
         dlg.close();
         commit(next, 'Deleted').then(() => expensesUI.entryDeleted(existing.id)); // v0.15.8: its photos too
       },
@@ -2033,10 +2085,10 @@ function openOccurrenceDialog(itemId, period) {
     if (!date.value) { toast('A valid date is required', 'error'); return null; }
     return { amount: pence, date: date.value, description: desc.value.trim() || item.description };
   };
-  const apply = (fn, message) => {
+  const apply = async (fn, message) => {
     const next = attempt(fn);
     if (!next) return;
-    if (!limitsOK(next)) return;
+    if (!(await limitsOK(next))) return;
     close();
     commit(next, message);
   };
@@ -2199,7 +2251,7 @@ function openTicketDialog(ticketId) {
 
   const confirmBtn = h('button', {
     type: 'submit', class: 'btn-primary',
-    onclick: (e) => {
+    onclick: async (e) => {
       e.preventDefault();
       const pence = parseAmount(amount.value);
       if (pence === null) return toast('Enter an amount like 12.34', 'error');
@@ -2211,7 +2263,7 @@ function openTicketDialog(ticketId) {
       }
       const next = attempt(() => confirmTicket(state.ledger, tset, t, { date: date.value, amount: pence, statementMonth }));
       if (!next) return;
-      if (!limitsOK(next)) return;
+      if (!(await limitsOK(next))) return;
       close();
       commit(next, 'Ticket confirmed');
     },
@@ -2244,14 +2296,14 @@ function openReturnDialog(month) {
   const date = h('input', { type: 'date', required: true, value: p.date });
   const confirmBtn = h('button', {
     type: 'submit', class: 'btn-primary',
-    onclick: (e) => {
+    onclick: async (e) => {
       e.preventDefault();
       const pence = parseAmount(amount.value);
       if (pence === null) return toast('Enter an amount like 12.34', 'error');
       if (!date.value) return toast('A valid date is required', 'error');
       const next = attempt(() => confirmReturn(state.ledger, tset, month, { date: date.value, amount: pence, description: p.description }));
       if (!next) return;
-      if (!limitsOK(next)) return;
+      if (!(await limitsOK(next))) return;
       close();
       commit(next, 'Confirmed');
     },
@@ -2884,7 +2936,7 @@ function openRecurringEditor(itemId) {
 
   const form = h('form', {
     method: 'dialog', class: 'sheet-body',
-    onsubmit: (e) => {
+    onsubmit: async (e) => {
       e.preventDefault();
       const env = envPicker.el.hidden ? null : envPicker.value();
       if (env?.error) return toast(env.error, 'error');
@@ -2900,7 +2952,7 @@ function openRecurringEditor(itemId) {
         ? attempt(() => updateRecurring(state.ledger, existing.id, d))
         : attempt(() => addRecurring(state.ledger, d)?.ledger);
       if (!next) return;
-      if (!limitsOK(next)) return;
+      if (!(await limitsOK(next))) return;
       dlg.close();
       commit(next, existing ? 'Recurring item updated' : 'Recurring item added');
       if (isOpen('recurringDialog')) renderRecurringManager();
@@ -2935,10 +2987,10 @@ function openRecurringEditor(itemId) {
   h('div', { class: 'sheet-actions' },
     existing ? h('button', {
       type: 'button', class: 'btn-danger',
-      onclick: () => {
-        if (!confirm(`Delete “${existing.description}”?\n\nIts projected entries disappear. Entries you’ve already confirmed stay as they are.`)) return;
+      onclick: async () => {
+        if (!(await confirmBox(`Delete “${existing.description}”?\n\nIts projected entries disappear. Entries you’ve already confirmed stay as they are.`, { title: 'Delete recurring item', okLabel: 'Delete', danger: true }))) return;
         const next = deleteRecurring(state.ledger, existing.id);
-        if (!limitsOK(next)) return; // e.g. deleting an income item
+        if (!(await limitsOK(next))) return; // e.g. deleting an income item
         dlg.close();
         commit(next, 'Recurring item deleted');
         if (isOpen('recurringDialog')) renderRecurringManager();
@@ -3133,8 +3185,8 @@ function openMoveDialog({ accountId, txId = null, fromId, toId }) {
   h('div', { class: 'sheet-actions' },
     existing ? h('button', {
       type: 'button', class: 'btn-danger',
-      onclick: () => {
-        if (!confirm('Delete this move?')) return;
+      onclick: async () => {
+        if (!(await confirmBox('Delete this move?', { title: 'Delete move', okLabel: 'Delete', danger: true }))) return;
         dlg.close();
         commit(deleteTransaction(state.ledger, existing.id), 'Deleted');
       },
@@ -3434,7 +3486,7 @@ function openAccountDialog(accountId) {
 
   const form = h('form', {
     method: 'dialog', class: 'sheet-body',
-    onsubmit: (e) => {
+    onsubmit: async (e) => {
       e.preventDefault();
       // allow a leading minus for an overdrawn opening balance
       const raw = opening.value.trim();
@@ -3478,7 +3530,7 @@ function openAccountDialog(accountId) {
         if (r) state.activeAccountId = r.account.id;
       }
       if (!next) return;
-      if (!limitsOK(next)) return; // a new opening balance or limit
+      if (!(await limitsOK(next))) return; // a new opening balance or limit
       dlg.close();
       commit(next, existing ? 'Account updated' : 'Account added');
       if (isOpen('settingsDialog')) renderSettings();
@@ -3509,8 +3561,8 @@ function openAccountDialog(accountId) {
   h('div', { class: 'sheet-actions' },
     existing && !isJoint ? h('button', {
       type: 'button', class: 'btn-danger', disabled: txCount > 0, title: txCount ? `Has ${txCount} entries — hide it instead` : '',
-      onclick: () => {
-        if (!confirm(`Delete ${existing.name}?`)) return;
+      onclick: async () => {
+        if (!(await confirmBox(`Delete ${existing.name}?`, { title: 'Delete account', okLabel: 'Delete', danger: true }))) return;
         const next = attempt(() => deleteAccount(state.ledger, existing.id));
         if (!next) return;
         dlg.close();
@@ -3648,7 +3700,7 @@ function renderSettings() {
           h('button', {
             type: 'button', class: 'btn-secondary',
             onclick: async () => {
-              if (!confirm('Stop syncing on this device?\n\nThis device keeps its data, and the Drive file is left as it is. You can reconnect any time.')) return;
+              if (!(await confirmBox('This device keeps its data, and the Drive file is left as it is. You can reconnect any time.', { title: 'Stop syncing on this device?', okLabel: 'Stop syncing' }))) return;
               await sync.disconnect();
               renderSettings();
               toast('Drive sync turned off on this device');
@@ -3752,7 +3804,7 @@ function renderSettings() {
           const msg = syncing
             ? 'Erase ALL finance data on this device?\n\nDrive sync is switched off here first, so your Drive copy is NOT touched — reconnect afterwards to load it back.'
             : 'Erase ALL finance data on this device? Export first if you want to keep it.';
-          if (!confirm(msg)) return;
+          if (!(await confirmBox(msg, { title: 'Erase all data', okLabel: 'Erase everything', danger: true }))) return;
           // Disconnect BEFORE emptying, or the next sync would read the empty
           // ledger as "everything deleted" and push that to Drive.
           if (syncing) await sync.disconnect();
@@ -3846,7 +3898,7 @@ function jointSection() {
       h('button', {
         type: 'button', class: 'btn-ghost btn-small',
         onclick: async () => {
-          if (!confirm('Remove the joint account’s data from this device?\n\nOnly this device’s copy goes. The Drive file is not touched — turn the joint account on again to bring it back.')) return;
+          if (!(await confirmBox('Only this device’s copy goes. The Drive file is not touched — turn the joint account on again to bring it back.', { title: 'Remove the joint account’s data from this device?', okLabel: 'Remove', danger: true }))) return;
           await removeJointData();
           renderSettings();
           toast('Joint data removed from this device');
@@ -3942,8 +3994,8 @@ function turnJointOn() {
 
 async function turnJointOff() {
   const dirty = jointSync?.getState().dirty;
-  if (!confirm('Turn the joint account off on this device?\n\nIt disappears from this device and stops syncing here. Your own accounts aren’t affected. The Drive file stays as it is, and this device keeps its copy so turning it back on is quick.'
-    + (dirty ? '\n\nThis device has joint changes that haven’t reached Drive yet — they’ll go when you turn it back on.' : ''))) return;
+  if (!(await confirmBox('It disappears from this device and stops syncing here. Your own accounts aren’t affected. The Drive file stays as it is, and this device keeps its copy so turning it back on is quick.'
+    + (dirty ? '\n\nThis device has joint changes that haven’t reached Drive yet — they’ll go when you turn it back on.' : ''), { title: 'Turn the joint account off on this device?', okLabel: 'Turn off' }))) return;
   state.jointSettings = { enabled: false };
   await saveJointSettings(state.jointSettings);
   jointSync = null;
@@ -4049,11 +4101,11 @@ function openBackupsDialog(engine = sync) {
   }
 
   async function restore(b, backup) {
-    const ok = confirm(
-      `Restore the backup from ${backupDayLabel(b)}?\n\n` +
+    const ok = await confirmBox(
       'Everything goes back to how it was then, on this device and on Drive; your other device follows on its next sync. ' +
       'A copy of your data as it is now is saved first, so you can undo this from the same list.\n\n' +
-      'If your other device has changes it hasn’t synced yet, those will be added back on top when it next syncs.');
+      'If your other device has changes it hasn’t synced yet, those will be added back on top when it next syncs.',
+      { title: `Restore the backup from ${backupDayLabel(b)}?`, okLabel: 'Restore', danger: true });
     if (!ok) return;
     show(head('Restoring…'), h('p', { class: 'muted' }, 'Saving a copy of your current data, then restoring…'));
     const r = await engine.restoreBackup(backup);
@@ -4131,10 +4183,11 @@ async function doImport(file) {
     // v0.14: a joint export only ever goes back into the joint account, and a personal one into yours
     if (isJointLedger(parsed.ledger)) {
       if (!jointActive()) throw new Error('That is a joint account export. Turn the joint account on (⚙) first, then import it.');
-      const ok = confirm(
-        `Replace the JOINT account’s data on this device with the export from ${when(parsed.exportedAt)}?\n\n` +
+      const ok = await confirmBox(
+        
         `This device: ${state.joint.transactions.length} joint entries\nExport file: ${parsed.ledger.transactions.length} entries\n\n` +
-        'The joint Drive file is replaced too on the next sync. Your own accounts aren’t touched.');
+        'The joint Drive file is replaced too on the next sync. Your own accounts aren’t touched.',
+        { title: `Replace the JOINT account’s data with the export from ${when(parsed.exportedAt)}?`, okLabel: 'Replace', danger: true });
       if (!ok) return;
       await commitParts({ joint: parsed.ledger });
       if (isOpen('settingsDialog')) renderSettings();
@@ -4143,11 +4196,11 @@ async function doImport(file) {
     }
     const current = state.personal.transactions.length;
     const incoming = parsed.ledger.transactions.length;
-    const ok = confirm(
-      `Replace this device's data with the export from ${when(parsed.exportedAt)}${parsed.exportedFrom ? ` (${parsed.exportedFrom})` : ''}?\n\n` +
+    const ok = await confirmBox(
       `This device: ${current} entries\nExport file: ${incoming} entries` +
       (sync.isEnabled() ? '\n\nDrive sync is on, so the Drive copy (and your other devices) will be replaced too on the next sync.' : '') +
-      (jointActive() ? '\n\nThe joint account isn’t touched.' : ''));
+      (jointActive() ? '\n\nThe joint account isn’t touched.' : ''),
+      { title: `Replace this device's data with the export from ${when(parsed.exportedAt)}${parsed.exportedFrom ? ` (${parsed.exportedFrom})` : ''}?`, okLabel: 'Replace', danger: true });
     if (!ok) return;
     state.meta = { ...state.meta, lastImportAt: new Date().toISOString(), lastImportFrom: parsed.exportedFrom || file.name };
     await saveMeta(state.meta);
@@ -4379,15 +4432,15 @@ function showLockScreen(header) {
   pass.focus();
 }
 
-function forgotPassphrase() {
-  const ok = confirm('Reset this device?\n\nWithout the passphrase the data here can’t be opened, so it will be DELETED from this device and the lock removed.\n\nYour Google Drive copy and its backups are NOT touched — connect Drive again afterwards (⚙ → Connect Google Drive) to load everything back. Only changes made here that hadn’t synced yet are lost.');
+async function forgotPassphrase() {
+  const ok = await confirmBox('Without the passphrase the data here can’t be opened, so it will be DELETED from this device and the lock removed.\n\nYour Google Drive copy and its backups are NOT touched — connect Drive again afterwards (⚙ → Connect Google Drive) to load everything back. Only changes made here that hadn’t synced yet are lost.', { title: 'Reset this device?', okLabel: 'Delete and reset', danger: true });
   if (!ok) return;
   (async () => {
     auth.clearToken?.();
     auth.forgetLocalToken?.();
     await wipeDevice();
     location.reload();
-  })().catch((err) => alert(`Couldn’t reset: ${err.message}`));
+  })().catch((err) => alertBox(`Couldn’t reset: ${err.message}`, { title: 'Reset failed' }));
 }
 
 function lockSvg(size = 20) {
