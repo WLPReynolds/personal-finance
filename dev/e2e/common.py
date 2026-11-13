@@ -35,6 +35,49 @@ try:
 except ImportError:
     pass
 
+# v0.15.24: the app's own message box (#msgDialog) replaced the browser's alert()/confirm().
+# The suites were written against native dialogs — page.on('dialog', handler) with d.message /
+# d.accept() / d.dismiss() — so Page.on('dialog') is bridged: when the message box opens, the
+# handler gets a native-looking dialog object (message = the old alert/confirm text) and the
+# matching button is clicked for it.
+_MSGBOX_JS = """
+(() => {
+  if (window.__ftMsgBoxWatch) return; window.__ftMsgBoxWatch = true;
+  const seen = new WeakSet();
+  new MutationObserver(async () => {
+    const dlg = document.getElementById('msgDialog');
+    const body = dlg && dlg.open ? dlg.firstElementChild : null;
+    if (!body || seen.has(body)) return;
+    seen.add(body);
+    const title = body.querySelector('.msg-title')?.textContent ?? '';
+    const text = [...body.querySelectorAll('.msg-text p')].map((p) => p.textContent).join('\\n\\n');
+    const btns = [...body.querySelectorAll('.msg-actions button')];
+    const confirmLike = btns.length > 1;
+    const action = await window.__ftMsgBox(title.endsWith('?') ? title + '\\n\\n' + text : text, confirmLike ? 'confirm' : 'alert');
+    (action === 'dismiss' && confirmLike ? btns[0] : btns[btns.length - 1]).click();
+  }).observe(document, { subtree: true, attributes: true, attributeFilter: ['open'] });
+})();
+"""
+class _MsgBoxDialog:
+    def __init__(self, message, kind): self.message, self.type, self.action = message, kind, 'accept'
+    def accept(self, prompt_text=None): self.action = 'accept'
+    def dismiss(self): self.action = 'dismiss'
+try:
+    from playwright.sync_api._generated import Page as _Page
+    _orig_page_on = _Page.on
+    def _page_on(self, event, handler):
+        if event != 'dialog':
+            return _orig_page_on(self, event, handler)
+        def respond(message, kind):
+            d = _MsgBoxDialog(message, kind); handler(d); return d.action
+        self.expose_function('__ftMsgBox', respond)
+        self.add_init_script(_MSGBOX_JS)
+        try: self.evaluate(_MSGBOX_JS)   # a page that's already loaded
+        except Exception: pass
+    _Page.on = _page_on
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------- Drive emulator
 # In-memory stand-in for the googleapis.com endpoints src/drive.js uses.
 # Attach with: context.route('https://www.googleapis.com/**', handle)

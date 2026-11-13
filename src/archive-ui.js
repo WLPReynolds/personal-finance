@@ -41,10 +41,10 @@ export function flashInto(el) {
 }
 
 /**
- * ctx: { h, $, toast, openDialog, isOpen, sync, drive, firstLiveDate(), renderSettings(), isWide() }
+ * ctx: { h, $, toast, openDialog, isOpen, confirmBox, sync, drive, firstLiveDate(), renderSettings(), isWide() }
  */
 export function createArchiveUI(ctx) {
-  const { h, $, toast, openDialog, isOpen, sync, drive } = ctx;
+  const { h, $, toast, openDialog, isOpen, confirmBox, sync, drive } = ctx;
   let archive = null; // this device's copy, loaded on first use
   let loaded = false;
 
@@ -105,7 +105,7 @@ export function createArchiveUI(ctx) {
       const localOnly = yearsOf(archive).filter((y) => !onDrive.has(y.year)).map((y) => y.year);
       let keep = [];
       if (localOnly.length) {
-        keep = confirm(`${localOnly.join(', ')} ${localOnly.length === 1 ? 'is' : 'are'} on this device but not on Drive.\n\nOK keeps ${localOnly.length === 1 ? 'it' : 'them'} here as well. Cancel uses only what’s on Drive.`)
+        keep = (await confirmBox(`${localOnly.join(', ')} ${localOnly.length === 1 ? 'is' : 'are'} on this device but not on Drive.\n\nKeep ${localOnly.length === 1 ? 'it' : 'them'} here as well, or use only what’s on Drive?`, { title: 'History on this device only', okLabel: 'Keep here too', cancelLabel: 'Use Drive only' }))
           ? yearsOf(archive).filter((y) => localOnly.includes(y.year)) : [];
       }
       archive = withYears({ ...emptyArchive(), names: archive?.names ?? {} }, [...keep, ...years]);
@@ -116,13 +116,12 @@ export function createArchiveUI(ctx) {
     }).catch((err) => toast(err?.message ?? String(err), 'error'));
   }
 
-  function deleteAll() {
+  async function deleteAll() {
     const syncing = sync.isEnabled();
-    const msg = `Delete the imported history (${yearsText(yearsOf(archive))}) from this device?` +
-      (syncing ? '\n\nIts files on Drive (My Drive/Finance/Archive) go to Drive’s bin too, where they can be recovered for 30 days. Your other device keeps its own copy until you delete it there.' : '') +
-      '\n\nYour accounts and entries are not touched. You can import the spreadsheet again any time.';
-    if (!confirm(msg)) return;
-    // the sign-in (if needed) must start from this tap, before anything is awaited
+    const msg = (syncing ? 'Its files on Drive (My Drive/Finance/Archive) go to Drive’s bin too, where they can be recovered for 30 days. Your other device keeps its own copy until you delete it there.\n\n' : '') +
+      'Your accounts and entries are not touched. You can import the spreadsheet again any time.';
+    if (!(await confirmBox(msg, { title: `Delete the imported history (${yearsText(yearsOf(archive))}) from this device?`, okLabel: 'Delete', danger: true }))) return;
+    // the sign-in (if needed) must start from this tap (the box's Delete button), before anything else is awaited
     const trash = syncing ? sync.withSyncToken((token) => trashArchiveYears(drive, token), { interactive: true }) : null;
     (async () => {
       await removeArchive();

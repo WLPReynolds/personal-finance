@@ -33,13 +33,13 @@ export function lineIcon(h, name, size = 16, cls = '') {
 }
 
 /**
- * ctx: { h, $, toast, openDialog, isOpen, photos (lib/photos.js library),
+ * ctx: { h, $, toast, openDialog, confirmBox, alertBox, isOpen, photos (lib/photos.js library),
  *        ledger(), accountById(id), commit(next, message) → Promise, openTxDialog(opts),
  *        formatPence(p), parseAmount(text), penceToInput(p), shortDate(iso), longDate(iso), today(),
  *        swatch(account), downloadBlob(blob, name) }
  */
 export function createExpensesUI(ctx) {
-  const { h, $, toast, openDialog } = ctx;
+  const { h, $, toast, openDialog, confirmBox, alertBox } = ctx;
   const view = { accountId: null, mode: 'list', select: false, picked: new Set(), paidOpen: false, counts: new Map() };
 
   const tickedAccounts = () => ctx.ledger().accounts.filter(claimsOn);
@@ -191,12 +191,12 @@ export function createExpensesUI(ctx) {
        * Apply the claim to `ledger` for entry `txId`. → { ledger } or { error } or { cancelled }.
        * Not shown = left exactly as it was.
        */
-      apply(ledger, txId) {
+      async apply(ledger, txId) {
         if (el.hidden) return { ledger };
         const photosLeft = saved.filter((m) => !removed.has(m.id)).length + pending.length;
         if (!box.checked) {
           if (!had) return { ledger };
-          if (photosLeft && !confirm(`Stop treating this as a business expense?\n\nIts ${plural(photosLeft, 'receipt')} on this device will be deleted too.`)) return { cancelled: true };
+          if (photosLeft && !(await confirmBox(`Its ${plural(photosLeft, 'receipt')} on this device will be deleted too.`, { title: 'Stop treating this as a business expense?', okLabel: 'Stop and delete', danger: true }))) return { cancelled: true };
           return { ledger: setExpense(ledger, txId, null), unmark: true };
         }
         const raw = amount.value.trim();
@@ -448,8 +448,8 @@ export function createExpensesUI(ctx) {
     let plan;
     try { plan = await ctx.photos.cleanupPlan(ctx.ledger()); } catch (err) { toast(`Couldn’t check the receipts: ${err.message}`, 'error'); return; }
     const msg = cleanupMessage(plan);
-    if (plan.kind !== 'some') { alert(msg); return; }
-    if (!confirm(msg)) return;
+    if (plan.kind !== 'some') { await alertBox(msg, { title: 'Receipts' }); return; }
+    if (!(await confirmBox(msg, { title: 'Delete receipts', okLabel: 'Delete', danger: true }))) return;
     try {
       await ctx.photos.remove(plan.photoIds);
       toast(`Deleted ${plural(plan.count, 'receipt')}`);
