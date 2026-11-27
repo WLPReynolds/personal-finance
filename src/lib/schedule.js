@@ -644,6 +644,7 @@ function cleanItemFields(f) {
     firstNumber: f.firstNumber ?? 1,
     payStatement,
     amountFrom: !payStatement && !isMove && f.amountFrom === TRACKER_SOURCE ? TRACKER_SOURCE : null,
+    isPay: f.kind === 'in' && Boolean(f.isPay), // v0.15.26: "This is my pay" — sets payday on the Summary card
     fromEnvelopeId: isMove ? f.fromEnvelopeId || null : null,
     toEnvelopeId: isMove ? f.toEnvelopeId || null : null,
     envelopeSplits: isMove || !Array.isArray(f.envelopeSplits) || !f.envelopeSplits.length ? null
