@@ -7,7 +7,7 @@
 import {
   loadLedger, saveLedger, loadMeta, saveMeta, loadSyncState, saveSyncState, loadBankHolidays, saveBankHolidays, requestPersistence,
   loadVaultHeader, saveVaultHeader, setVaultKey, rekeyAll, wipeDevice, flushWrites, loadAuthCache, saveAuthCache,
-  loadTrackerEstimates, saveTrackerEstimates,
+  loadTrackerEstimates, saveTrackerEstimates, loadParkingShare, saveParkingShare,
   loadJointLedger, saveJointLedger, loadJointSyncState, saveJointSyncState, loadJointSettings, saveJointSettings, removeJointData,
   photoBackend,
 } from './store.js';
@@ -67,11 +67,14 @@ import {
   isRingFenced, moveLockedByRingFence, addRingFence, removeRingFence, syncRingFence, ticketsMissingFromTracker, TICKET_DESCRIPTION,
 } from './lib/tickets.js';
 
+import {
+  parkingSharingOn, parkingSettingsRecord, setParkingSharing, setParkingFlag, isParking, publishParking, findParkingFile, NO_FILE_MESSAGE,
+} from './lib/parking-share.js';
 import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } from './lib/update-check.js';
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
 
-export const APP_VERSION = '0.15.24';
+export const APP_VERSION = '0.15.25';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -101,6 +104,7 @@ const state = {
   holidayInfo: { source: 'built-in', fetchedAt: null, lastYear: lastKnownYear(BUILT_IN_BANK_HOLIDAYS) },
   vault: null, // v0.10: the passphrase lock's header while it's on (this device only)
   tracker: null, // v0.11: the ticket tracker's figures as last read from Drive (this device only)
+  parkingShare: null, // v0.15.25: what this device last saw of parking-transactions.json (this device only)
   envView: null, // v0.12: { accountId, envelopeId } shown in the envelopes dialog (undefined id = all envelopes)
 };
 
@@ -542,7 +546,9 @@ const sync = createSyncEngine({
     loadSyncState,
     saveSyncState,
   },
-  afterSync: (token) => checkTracker(token),
+  afterSync: async (token) => {
+    try { await checkTracker(token); } finally { await shareParking(token); } // v0.15.25
+  },
 });
 
 /** The day your own records start: the earliest opening date across your accounts. */
@@ -753,6 +759,85 @@ function trackerStatusText() {
   return parts.join(' ');
 }
 
+// ------------------------------------------------------------------ v0.15.25 parking shared with the ticket tracker
+
+/**
+ * Bring parking-transactions.json up to date after a sync that reached Drive
+ * (that sync's token, so never a sign-in window). Your own file only — never
+ * the joint one. Skipped while a clash is waiting, so a half-merged list is
+ * never shared. Never creates the file (lib/parking-share.js).
+ */
+async function shareParking(token) {
+  if (!parkingSharingOn(state.personal)) return;
+  if (sync.getState().status === 'conflicts') return;
+  const before = JSON.stringify([state.parkingShare?.error ?? null, state.parkingShare?.sharedAt ?? null]);
+  const rec = await publishParking({ drive: syncDrive, token, ledger: state.personal, cached: state.parkingShare, appVersion: `v${APP_VERSION}` });
+  state.parkingShare = rec;
+  try { await saveParkingShare(rec); } catch { /* keeps working from memory this session */ }
+  if (isOpen('settingsDialog') && JSON.stringify([rec.error, rec.sharedAt]) !== before) renderSettings();
+}
+/** ⚙ "Share now" (a tap — may open Google's window). */
+function shareParkingFromTap() {
+  sync.withSyncToken((token) => shareParking(token), { interactive: true })
+    .then(() => {
+      const r = state.parkingShare;
+      toast(r?.error ?? 'Parking shared with the ticket tracker', r?.error ? 'error' : undefined);
+      if (isOpen('settingsDialog')) renderSettings();
+    })
+    .catch((err) => toast(err.message, 'error'));
+}
+/**
+ * Turning sharing on: the ticket tracker's file must be there first — this app never makes it.
+ * Must be called straight from the tap (Google's window may open).
+ */
+function turnOnParkingSharing() {
+  return sync.withSyncToken(async (token) => {
+    const file = await findParkingFile({ drive: syncDrive, token });
+    if (!file) return { found: false };
+    await commit(setParkingSharing(state.ledger, true), 'Parking sharing on');
+    await shareParking(token);
+    return { found: true };
+  }, { interactive: true });
+}
+/** "Sharing 3 parking payments · file updated 27 Nov, 18:30 · checked 27 Nov, 18:31" — or what's wrong. */
+function parkingStatusText() {
+  const r = state.parkingShare;
+  if (!sync.isEnabled()) return 'Needs Google Drive sync on — the list is shared through your Drive.';
+  if (!r) return 'Not checked yet — it’s shared on the next sync.';
+  if (r.error) return `${r.error} Checked ${when(r.checkedAt)}.`;
+  const n = r.transactions?.length ?? 0;
+  return `Sharing ${n} parking payment${n === 1 ? '' : 's'}${r.sharedAt ? ` · file last updated from this device ${when(r.sharedAt)}` : ''} · checked ${when(r.checkedAt)}.`;
+}
+/** ⚙ Ticket tracker → Parking. */
+function parkingSection() {
+  const on = parkingSharingOn(state.ledger);
+  const box = h('input', { type: 'checkbox', id: 'parkingShareOn', checked: on, disabled: !sync.isEnabled() && !on });
+  const note = h('p', { class: 'small warn', hidden: true });
+  box.addEventListener('change', () => {
+    if (!box.checked) {
+      commit(setParkingSharing(state.ledger, false), 'Parking sharing off').then(() => { if (isOpen('settingsDialog')) renderSettings(); });
+      return;
+    }
+    box.disabled = true;
+    // started synchronously from the tap, so Google's sign-in window is allowed (Android rule)
+    turnOnParkingSharing()
+      .then((r) => {
+        if (r.found) { if (isOpen('settingsDialog')) renderSettings(); return; }
+        box.checked = false; box.disabled = false;
+        note.textContent = NO_FILE_MESSAGE; note.hidden = false;
+      })
+      .catch((err) => { box.checked = false; box.disabled = false; note.textContent = err.message; note.hidden = false; });
+  });
+  return h('div', { id: 'parkingSection' },
+    h('h4', { class: 'tracker-sub' }, 'Parking'),
+    h('p', { class: 'muted small' }, 'Tick “Parking” on a payment here and the ticket tracker marks that day as parked, at that amount — so you only enter parking once, on whichever card paid. The tracker makes the shared file (parking-transactions.json); this app only keeps it up to date.'),
+    h('label', { class: 'check' }, box, h('span', {}, 'Share parking with the ticket tracker')),
+    note,
+    on || state.parkingShare ? h('p', { class: `small ${on && state.parkingShare?.error ? 'warn' : 'muted'}`, id: 'parkingStatusLine' }, on ? parkingStatusText() : 'Off. Parking ticks you’ve made are kept for when it’s back on.') : null,
+    on && sync.isEnabled() ? h('button', { type: 'button', class: 'btn-secondary', onclick: shareParkingFromTap }, 'Share now') : null,
+    !sync.isEnabled() && !on ? h('p', { class: 'small muted' }, 'Needs Google Drive sync on.') : null);
+}
+
 let syncTimer = null;
 /** Sync shortly after an edit, if signed in (never opens Google's window). */
 function scheduleSync(delay = 4000) {
@@ -928,7 +1013,7 @@ function describeRecord(group, side) {
     const what = r.skipped ? 'skipped' : [r.date && shortDate(r.date), r.amount !== null && formatPence(r.amount), r.description].filter(Boolean).join(' · ') || 'as the series';
     return `${item?.description ?? 'Recurring item'}, ${periodLabel(r.period)}: ${what}`;
   }
-  return r.name ?? 'Recurring item';
+  return r.name ?? r.description ?? 'Recurring item';
 }
 
 function openConflictDialog(engine = sync) {
@@ -1812,6 +1897,7 @@ function openTxDialog(opts) {
     for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === kind));
     syncLoanChoices();
     if (rfField) rfField.hidden = kind !== 'debit' || (!existing && Boolean(counterpartSelect.value));
+    if (pkField) pkField.hidden = kind !== 'debit' || (!existing && Boolean(counterpartSelect.value));
     amountField.hidden = kind === 'note';
     if (counterpartField && !existing) counterpartField.hidden = kind === 'note';
     updateCounterpartHint();
@@ -1890,6 +1976,14 @@ function openTxDialog(opts) {
     else updateCounterpartHint();
   }
   rfBox.addEventListener('change', syncMoveLock);
+  // v0.15.25 parking shared with the ticket tracker: the tick shows only while sharing is on (⚙ → Ticket tracker),
+  // on your own accounts (not the joint), and only on a plain payment out (not a transfer, credit or note).
+  const pkPossible = parkingSharingOn(state.ledger) && !isJointAccount(account) && !(existing && existing.transferId);
+  const pkBox = h('input', { type: 'checkbox', checked: Boolean(existing && isParking(existing)) });
+  const pkField = pkPossible ? h('div', { class: 'field', id: 'parkingField' },
+    h('label', { class: 'check' }, pkBox, h('span', {}, 'Parking')),
+    h('div', { class: 'muted small' }, 'Shared with the ticket tracker, which marks this date as a parked day at this amount.')) : null;
+  const pkShown = () => Boolean(pkField) && !pkField.hidden;
   const rfCard = existing?.ringFenceOf ? state.ledger.transactions.find((t) => t.id === existing.ringFenceOf) : null;
   const ticketNote = existing?.ticketId
     ? h('div', { class: 'linked' }, `🎟 Ticket from the ticket tracker (${existing.ticketId.replace(/^p-/, 'valid from ')}). Deleting it puts the “Bought — confirm” row back.`)
@@ -1930,6 +2024,11 @@ function openTxDialog(opts) {
         }));
       }
       if (!next) return;
+      // v0.15.25 the Parking tick (only when the tick is on the form: sharing off leaves every flag as it was)
+      if (pkField) {
+        const pkId = existing ? existing.id : next.transactions.at(-1).id;
+        next = setParkingFlag(next, pkId, pkShown() && pkBox.checked);
+      }
       // v0.13 ring-fence follows the spend: added, updated, or removed
       {
         const id = existing ? existing.id : next.transactions.at(-1).id;
@@ -1976,6 +2075,7 @@ function openTxDialog(opts) {
   h('label', { class: 'field' }, h('span', {}, 'Date'), date, dateWarn),
   stmtField,
   rfField, // v0.15.13: above "Also record…" — it's the usual choice on a card spend
+  pkField,
   counterpartField,
   picker.el,
   exp?.el,
@@ -3726,8 +3826,8 @@ function renderSettings() {
   const jointOn = Boolean(state.jointSettings?.enabled);
   const nRec = recurringItems(l).length;
   const claimAccs = l.accounts.filter(claimsOn);
-  const trackerShown = Boolean(usesTracker(l) || ticketSettingsRecord(l));
-  const trackerWarn = state.tracker?.error || state.tracker?.estimates?.ticketsError;
+  const trackerShown = Boolean(usesTracker(l) || ticketSettingsRecord(l) || parkingSettingsRecord(l));
+  const trackerWarn = state.tracker?.error || state.tracker?.estimates?.ticketsError || (parkingSharingOn(l) && state.parkingShare?.error);
   const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
   const pages = [
     { group: 'Money', id: 'accounts', icon: 'wallet', title: 'Accounts', sub: `${plural(l.accounts.length, 'account')} · add, edit, reorder`,
@@ -3765,7 +3865,7 @@ function renderSettings() {
         `Last export: ${when(state.meta.lastExportAt)} · Last import: ${when(state.meta.lastImportAt)}${state.meta.lastImportFrom ? ` (from ${state.meta.lastImportFrom})` : ''}`))] },
     { group: 'Data', id: 'history', icon: 'clock', title: 'History & Excel', sub: 'Import earlier years, export to Excel',
       content: () => [archiveUI.settingsSection(), exportUI.settingsSection()] },
-    trackerShown ? { group: 'Data', id: 'tracker', icon: 'ticket', title: 'Ticket tracker', sub: trackerWarn ? 'Needs attention' : 'Figures and ticket purchases', warn: Boolean(trackerWarn),
+    trackerShown ? { group: 'Data', id: 'tracker', icon: 'ticket', title: 'Ticket tracker', sub: trackerWarn ? 'Needs attention' : 'Figures, ticket purchases and parking', warn: Boolean(trackerWarn),
       content: () => [h('section', { class: 'settings-section tracker-group', id: 'trackerSection' }, h('h3', {}, 'Ticket tracker'), h('div', { class: 'tracker-body' },
     [
       usesTracker(l) ? [
@@ -3779,7 +3879,8 @@ function renderSettings() {
       state.tracker?.estimates?.ticketsError ? h('p', { class: 'small warn' }, state.tracker.estimates.ticketsError) : null,
       st.enabled ? h('button', { type: 'button', class: 'btn-secondary', onclick: checkTrackerFromTap }, 'Check now') : null,
       ] : null,
-      ticketSection()]))] } : null,
+      ticketSection(),
+      parkingSection()]))] } : null,
     { group: 'This device', id: 'layout', icon: 'layout', title: 'Layout', sub: 'Grid or list, and where the phone opens',
       content: () => [h('section', { class: 'settings-section' },
       h('h3', {}, 'Layout'),
@@ -4649,6 +4750,7 @@ async function boot() {
     recombine();
     state.meta = await loadMeta();
     state.tracker = (await loadTrackerEstimates().catch(() => null)) ?? null;
+    state.parkingShare = (await loadParkingShare().catch(() => null)) ?? null;
   } catch (err) {
     app.replaceChildren(h('div', { class: 'card' }, h('h2', {}, 'Storage unavailable'), h('p', {}, `This browser blocked local storage (${err.message}). Private/incognito windows often do this.`)));
     return;

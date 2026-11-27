@@ -5,7 +5,7 @@
  * phone still on the old version" problem. Bump VERSION on each deploy
  * anyway so old caches get cleaned up.
  */
-const VERSION = '0.15.24';
+const VERSION = '0.15.25';
 const CACHE = `finance-tracker-${VERSION}`;
 const SHELL = [
   './',
@@ -31,6 +31,7 @@ const SHELL = [
   'src/lib/backups.js',
   'src/lib/vault.js',
   'src/lib/tracker-estimates.js',
+  'src/lib/parking-share.js',
   'src/lib/tickets.js',
   'src/lib/envelopes.js',
   'src/lib/workdays.js',

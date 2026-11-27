@@ -8,6 +8,7 @@
  * slots in behind loadLedger/saveLedger.
  *   'sync', 'bankHolidays', 'auth' (v0.10), 'vault' (v0.10 lock header),
  *   'trackerEstimates' (v0.11)
+ *   'parkingShare' (v0.15.25)
  *   'jointLedger', 'jointSync', 'jointSettings' (v0.14: the joint account's own
  *   local copy, its own Drive sync state, and this device's on/off switch —
  *   never mixed with the personal records above)
@@ -38,7 +39,7 @@ function openDb() {
 // and `vaultKey` holds the data key in memory while unlocked. The lock's
 // header ('vault') is the one record always saved in plain view.
 const VAULT = 'vault';
-const DATA_KEYS = ['ledger', 'meta', 'sync', 'bankHolidays', 'auth', 'trackerEstimates', 'jointLedger', 'jointSync', 'jointSettings', 'archive'];
+const DATA_KEYS = ['ledger', 'meta', 'sync', 'bankHolidays', 'auth', 'trackerEstimates', 'parkingShare', 'jointLedger', 'jointSync', 'jointSettings', 'archive'];
 let vaultKey = null;
 
 export class LockedError extends Error {
@@ -112,6 +113,10 @@ export const saveAuthCache = (value) => put('auth', value);
 /** v0.11: the ticket tracker's published figures, as last read from Drive (this device only — see lib/tracker-estimates.js). */
 export const loadTrackerEstimates = () => get('trackerEstimates');
 export const saveTrackerEstimates = (value) => put('trackerEstimates', value);
+
+/** v0.15.25: what this device last saw of parking-transactions.json (this device only — see lib/parking-share.js). */
+export const loadParkingShare = () => get('parkingShare');
+export const saveParkingShare = (value) => put('parkingShare', value);
 
 /** v0.14 joint account (lib/joint.js). Separate records, so the personal ones are never touched by joint code. */
 export const loadJointLedger = () => get('jointLedger');
