@@ -73,8 +73,9 @@ import {
 import { pageVersionFrom, isNewerVersion, dueForCheck, UPDATE_CHECK_EVERY_MS } from './lib/update-check.js';
 import { iosInstallState, hintBannerDue } from './lib/install-hint.js';
 import { monthDays, sparklineSvg } from './lib/sparkline.js';
+import { nextPayday, daysUntil, leftUntilPayday, spentThisMonth, spendComparison, comingUp, allWarnings } from './lib/month-card.js';
 
-export const APP_VERSION = '0.15.25';
+export const APP_VERSION = '0.15.26';
 
 const state = {
   // v0.14: `ledger` is what every screen draws from. With the joint account
@@ -1355,6 +1356,76 @@ function monthSparkline(active, view, today) {
   return el;
 }
 
+/**
+ * v0.15.26: the "This month" card at the top of the phone Summary (Wayne, 27 Nov;
+ * Project doc claude/summary-card-design.md): left until payday, payday countdown,
+ * spent this month (joint on its own line) against last month, the next 7 days'
+ * bills and every account's limit warnings.
+ */
+function monthCard(view, today, accounts) {
+  const joint = jointIds();
+  const personalIds = state.ledger.accounts.filter((a) => !joint.has(a.id)).map((a) => a.id);
+  const pay = nextPayday(view, today);
+  const left = leftUntilPayday(view, pay);
+  const short = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  let top;
+  if (!pay) {
+    top = h('p', { class: 'mc-hint muted small' },
+      'Tick “This is my pay” on your salary in ',
+      h('button', { type: 'button', class: 'btn-link', onclick: () => openRecurringManager() }, 'Recurring items'),
+      ' to see days to payday and what’s left until then.');
+  } else {
+    const days = pay.date ? daysUntil(today, pay.date) : null;
+    const payText = pay.isToday ? 'Payday today' : days === 1 ? 'Payday tomorrow' : `Payday in ${days} days`;
+    top = h('div', { class: 'mc-top' },
+      h('div', { class: 'mc-lead' },
+        h('div', { class: 'mc-label' }, 'Left until payday'),
+        left ? h('div', { class: `mc-amount ${left.balance < 0 ? 'neg' : ''}` }, formatPence(left.balance)) : h('div', { class: 'mc-amount muted' }, '—'),
+        left ? h('div', { class: 'mc-sub muted small' }, `${left.account.name} at the end of ${short(left.date)}`) : null),
+      h('div', { class: 'mc-pay' },
+        h('div', { class: 'mc-pay-days' }, payText),
+        pay.date ? h('div', { class: 'muted small' }, pay.isToday ? `Next: ${short(pay.date)}` : short(pay.date)) : null));
+  }
+
+  const spent = spentThisMonth(state.ledger, personalIds, today);
+  const cmp = spendComparison(state.ledger, personalIds, today);
+  const cmpEl = !cmp ? null : (() => {
+    const basis = cmp.basis === 'three-months' ? 'your 3-month average' : 'last month';
+    const text = cmp.diff === 0 ? `Same as ${basis} at this point`
+      : `${formatPence(Math.abs(cmp.diff))} ${cmp.diff < 0 ? 'under' : 'over'} ${basis} at this point`;
+    return h('div', { class: `mc-cmp ${cmp.diff <= 0 ? 'mc-under' : 'mc-over'}` }, text);
+  })();
+  const tile = (label, amount, extra, cls = '') => h('div', { class: `mc-tile ${cls}` },
+    h('div', { class: 'mc-tile-label muted small' }, label),
+    h('div', { class: 'mc-tile-amount' }, formatPence(amount)),
+    extra);
+  const tiles = h('div', { class: 'mc-tiles' },
+    tile('Spent this month', spent, cmpEl, 'mc-spent'),
+    joint.size ? tile('Joint spending', spentThisMonth(state.ledger, [...joint], today), null, 'mc-joint') : null);
+
+  const bills = comingUp(view, today);
+  const billRows = bills.map((t) => h('li', {},
+    h('button', {
+      type: 'button', class: 'mc-bill',
+      onclick: () => (t.isProjected && t.projection ? openProjection(t.projection) : openTxDialog({ txId: t.id })),
+    },
+      h('span', { class: 'mc-bill-date' }, t.date === today ? 'Today' : short(t.date)),
+      h('span', { class: 'mc-bill-desc' }, t.description, h('span', { class: 'muted small' }, accountById(t.accountId)?.name ?? '')),
+      h('span', { class: 'mc-bill-amt' }, formatPence(t.amount)))));
+  const billsEl = h('div', { class: 'mc-bills' },
+    h('div', { class: 'mc-head' }, 'Next 7 days', bills.length ? h('span', { class: 'muted small' }, ` · ${formatPence(bills.reduce((s, t) => s + t.amount, 0))}`) : null),
+    bills.length ? h('ul', { class: 'mc-bill-list' }, billRows) : h('p', { class: 'muted small mc-none' }, 'Nothing due to go out.'));
+
+  const words = { overdraft: 'into its overdraft', overdrawn: 'overdrawn', 'past-overdraft': 'past its overdraft limit', 'over-credit-limit': 'over its credit limit' };
+  const warnings = allWarnings(view, accounts, today, projectionEnd());
+  const warnEl = warnings.length ? h('ul', { class: 'mc-warns' }, warnings.map((w) => h('li', {},
+    h('button', { type: 'button', class: `mc-warn ${w.level === 'overdraft' ? 'lim-warn' : 'lim-alert'}`, onclick: () => openAccountTab(w.account.id) },
+      `⚠ ${w.account.name} ${words[w.level]} ${w.date === today ? 'today' : `from ${short(w.date)}`}`)))) : null;
+
+  return h('section', { class: 'month-card', 'aria-label': 'This month' }, top, tiles, warnEl, billsEl);
+}
+
 /** v0.14 phone landing page: every visible account's header card. */
 function renderSummary(accounts) {
   const view = viewLedger();
@@ -1362,6 +1433,7 @@ function renderSummary(accounts) {
   const wrap = h('div', { class: 'list-view summary-view' },
     accountTabs(accounts),
     h('div', { class: 'summary-tools' }, findButton('find-wide')),
+    monthCard(view, today, accounts),
     h('div', { class: 'summary' }, accounts.map((a) => bannerCard(a, view, today, { summary: true }))));
   addSwipe(wrap, accounts);
   app.replaceChildren(wrap);
@@ -2555,7 +2627,7 @@ function renderRecurringManager() {
       acc ? swatch(acc) : null,
       h('span', { class: 'rec-main' },
         h('span', { class: 'rec-name' }, item.description),
-        h('span', { class: 'muted small' }, `${describeRule(item, itemStatementCard(item))}${trk ? ' · amount from the ticket tracker' : ''} · ${itemAccountsText(item)}`),
+        h('span', { class: 'muted small' }, `${describeRule(item, itemStatementCard(item))}${trk ? ' · amount from the ticket tracker' : ''}${item.isPay && item.kind === 'in' ? ' · your pay' : ''} · ${itemAccountsText(item)}`),
         h('span', { class: 'small' }, status)),
       h('span', { class: `rec-amt ${item.kind === 'in' ? 'credit' : ''}` }, itemStatementCard(item) ? 'statement' : signedAmount(item.kind, nextAmount))));
   };
@@ -2832,6 +2904,11 @@ function openRecurringEditor(itemId) {
   const trackerField = h('div', { class: 'field' },
     h('label', { class: 'check' }, fromTracker, h('span', {}, 'Take the amount from the ticket tracker (“Set aside on payday”)')),
     trackerHint);
+  // v0.15.26: payday on the Summary's "This month" card comes from the item(s) ticked here
+  const isPay = h('input', { type: 'checkbox', class: 'is-pay', checked: Boolean(existing?.isPay) });
+  const isPayField = h('div', { class: 'field' },
+    h('label', { class: 'check' }, isPay, h('span', {}, 'This is my pay')),
+    h('div', { class: 'muted small' }, 'Sets payday on the Summary page — the days to go and what’s left until then.'));
   const statementCardSelected = () => (kind === 'transfer' ? accountById(toAccount.value) : null);
   const payingStatement = () => payStmt.checked && Boolean(statementConfig(statementCardSelected()));
   // v0.12: which envelope(s) the money goes in / comes out of
@@ -2930,6 +3007,7 @@ function openRecurringEditor(itemId) {
     return {
       weekdayRule,
       payStatement: false,
+      isPay: kind === 'in' && isPay.checked,
       amountFrom: fromTracker.checked && kind !== 'move' ? TRACKER_SOURCE : null,
       fromEnvelopeId: kind === 'move' ? fromEnv.value || null : null,
       toEnvelopeId: kind === 'move' ? toEnv.value || null : null,
@@ -2948,6 +3026,7 @@ function openRecurringEditor(itemId) {
     for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === kind));
     toField.hidden = kind !== 'transfer';
     moveField.hidden = kind !== 'move';
+    isPayField.hidden = kind !== 'in';
     accountLabel.textContent = kind === 'transfer' ? 'From' : 'Account';
     for (const o of shift.options) o.textContent = shiftWords[kind][o.value]; // v0.14.4: wording follows out / in / transfer
     // statement payment: only for a transfer to a credit card
@@ -3083,6 +3162,7 @@ function openRecurringEditor(itemId) {
   startHint,
   endFields,
   shiftField,
+  isPayField,
   preview,
   h('div', { class: 'sheet-actions' },
     existing ? h('button', {

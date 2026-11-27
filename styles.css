@@ -1122,3 +1122,32 @@ dialog.window .win-bar .arch-ro {
 #settingsDialog .sheet-head + .settings-section { border-top: 0; padding-top: 0; margin-top: 0; }
 /* Settings keeps a steady height between the menu and its pages, so it doesn't jump about */
 #settingsDialog[open] { min-height: min(78dvh, 760px); }
+
+/* v0.15.26: "This month" card at the top of the phone Summary */
+.month-card { margin: 10px 12px 10px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); display: grid; gap: 12px; }
+.mc-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.mc-lead { min-width: 0; }
+.mc-label { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.mc-amount { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.mc-amount.neg { color: var(--neg); }
+.mc-sub { margin-top: 2px; }
+.mc-pay { text-align: right; flex-shrink: 0; }
+.mc-pay-days { font-weight: 700; color: var(--primary); }
+.mc-hint { margin: 0; }
+.mc-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.mc-tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.mc-tile-amount { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mc-cmp { font-size: 12px; font-weight: 600; margin-top: 2px; }
+.mc-under { color: var(--credit); }
+.mc-over { color: var(--warn-text); }
+.mc-warns { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.mc-warn { border: 0; width: 100%; text-align: left; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+.mc-head { font-weight: 700; font-size: 14px; }
+.mc-none { margin: 4px 0 0; }
+.mc-bill-list { list-style: none; margin: 4px 0 0; padding: 0; }
+.mc-bill-list li + li { border-top: 1px solid var(--line); }
+.mc-bill { display: grid; grid-template-columns: minmax(84px, auto) 1fr auto; gap: 8px; align-items: baseline; width: 100%; padding: 7px 0; border: 0; background: none; text-align: left; cursor: pointer; }
+.mc-bill-date { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.mc-bill-desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-bill-desc .small { margin-left: 6px; }
+.mc-bill-amt { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
